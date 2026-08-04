@@ -2,7 +2,7 @@
   "id": "FEAT-003",
   "type": "feat",
   "description": "Walk-forward validation, out-of-sample testing, and regime-aware robustness framework. Implements the validation pipeline that separates surviving hypotheses into those with genuine predictive power vs those that are overfit or regime-dependent.",
-  "status": "in_progress",
+  "status": "completed",
   "steps": [
     "Create src/quant_research/validation/walk_forward.py - WalkForwardValidator class: implements expanding-window and rolling-window walk-forward analysis, configurable train/test split ratios (default 80/20 with 5 folds), for each fold: train signal parameters on in-sample, test on out-of-sample, tracks performance stability across folds (Sharpe, hit rate, expectancy per fold), rejects hypotheses where out-of-sample performance degrades >50% vs in-sample, computes consistency ratio (fraction of folds with positive expectancy), requires consistency ratio >= 0.6 to pass",
     "Create src/quant_research/validation/out_of_sample.py - OutOfSampleValidator class: reserves final 20% of data as pure holdout (never touched during development), runs surviving hypotheses on holdout data, computes performance metrics on holdout, applies stricter thresholds on holdout (p < 0.01, Sharpe > 0.4), computes decay analysis (is the edge weakening over time?), tests hypothesis across different market regimes identified in the data",
@@ -25,5 +25,5 @@
     "cd /projects/sandbox/yo && uv run pytest tests/test_validation.py -v"
   ],
   "blocked_reason": null,
-  "findings": ""
+  "findings": "All 34 tests pass in 3s. Total test suite (98 tests) passes in 5.5s. WalkForwardValidator correctly identifies momentum signals in trending data (consistency_ratio >= 0.6) while noise fails. RegimeAnalyzer successfully identifies 3+ regimes from synthetic data with obvious regime transitions. TransactionCostModel correctly reduces returns (net <= gross). Pipeline rejection funnel arithmetic is verified consistent. No hmmlearn installed so HMM path uses rule-based fallback. The sample_ohlcv fixture from conftest.py was not directly used since the tests needed more controlled synthetic data (trending, random, regime-specific) to produce deterministic pass/fail outcomes."
 }
