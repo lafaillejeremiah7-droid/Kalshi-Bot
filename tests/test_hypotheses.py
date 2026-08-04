@@ -417,7 +417,7 @@ class TestHypothesisRejector:
         rejector: HypothesisRejector,
         enriched_data: pd.DataFrame,
     ) -> None:
-        """ORDER_FLOW_PROXY hypotheses are flagged, not outright rejected."""
+        """ORDER_FLOW_PROXY hypotheses are rejected but flagged as limited_data_confidence."""
 
         def weak_signal(df: pd.DataFrame) -> pd.Series:
             # Create a signal that would normally be rejected (weak)
@@ -439,8 +439,8 @@ class TestHypothesisRejector:
         )
         results = rejector.evaluate_all([of_hyp], enriched_data)
         assert len(results) == 1
-        # Should NOT be rejected (flagged instead)
-        assert not results[0].rejected
+        # Should be rejected (no bypass) but flagged as limited_data_confidence
+        assert results[0].rejected
         assert results[0].confidence_flag == "limited_data_confidence"
 
     def test_rejection_reasons_populated(

@@ -294,6 +294,10 @@ class TransactionCostModel:
     ) -> CostAdjustedResult:
         """Evaluate whether a hypothesis survives transaction costs.
 
+        Uses discretized positions (long/flat/short) derived from the signal
+        to compute realistic trade events and holding-period returns, rather
+        than applying costs to every raw signal change on 1-day returns.
+
         Parameters
         ----------
         hypothesis : Hypothesis
@@ -306,11 +310,26 @@ class TransactionCostModel:
         CostAdjustedResult
             Comparison of gross vs net performance metrics.
         """
-        # Compute gross returns
+        # Compute signal and discretize into positions: +1, 0, -1
         try:
-            gross_returns = self.tester.compute_signal_returns(hypothesis, data)
+            raw_signal = hypothesis.signal_function(data)
         except Exception:
-            gross_returns = pd.Series(dtype=float)
+            raw_signal = pd.Series(dtype=float)
+
+        if len(raw_signal) < 5:
+            return CostAdjustedResult(
+                hypothesis_id=hypothesis.id,
+                survives_costs=False,
+            )
+
+        # Discretize signal into positions
+        positions = pd.Series(0.0, index=raw_signal.index)
+        positions[raw_signal > 0] = 1.0
+        positions[raw_signal < 0] = -1.0
+
+        # Compute position-weighted returns (holding-period returns)
+        daily_ret = data["Close"].pct_change().fillna(0.0)
+        gross_returns = (positions.shift(1) * daily_ret).dropna()
 
         if len(gross_returns) < 5:
             return CostAdjustedResult(
@@ -318,19 +337,18 @@ class TransactionCostModel:
                 survives_costs=False,
             )
 
-        # Get signal, price, and volume aligned to returns
-        signal = hypothesis.signal_function(data)
+        # Get price and volume for cost computation
         avg_price = data["Close"].rolling(20, min_periods=1).mean()
         avg_volume = data["Volume"].astype(float).rolling(20, min_periods=1).mean()
 
         # Compute realized vol
-        daily_ret = np.log(data["Close"] / data["Close"].shift(1))
-        realized_vol = daily_ret.rolling(20, min_periods=5).std() * np.sqrt(252)
+        log_ret = np.log(data["Close"] / data["Close"].shift(1))
+        realized_vol = log_ret.rolling(20, min_periods=5).std() * np.sqrt(252)
         realized_vol = realized_vol.fillna(0.20)
 
-        # Apply costs
+        # Apply costs using discretized positions (trade events = position changes)
         net_returns, avg_cost = self.apply_costs(
-            gross_returns, signal, avg_price, avg_volume, realized_vol
+            gross_returns, positions, avg_price, avg_volume, realized_vol
         )
 
         # Compute metrics
@@ -350,9 +368,9 @@ class TransactionCostModel:
         # Determine survival
         survives = net_sharpe > self.min_net_sharpe and net_expectancy > 0
 
-        # Estimate annual turnover
-        signal_changes = signal.diff().abs().fillna(0)
-        trades_per_day = float(signal_changes.mean()) / 2.0
+        # Estimate annual turnover from position changes
+        position_changes = positions.diff().abs().fillna(0)
+        trades_per_day = float(position_changes[position_changes > 0].count()) / max(len(positions), 1)
         turnover_annual = trades_per_day * 252
 
         return CostAdjustedResult(
@@ -365,7 +383,7 @@ class TransactionCostModel:
             gross_profit_factor=gross_pf,
             net_profit_factor=net_pf,
             total_cost_per_trade=avg_cost,
-            n_trades=len(gross_returns),
+            n_trades=int(position_changes[position_changes > 0].sum() / 2),
             turnover_annual=turnover_annual,
         )
 

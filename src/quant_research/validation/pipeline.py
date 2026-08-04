@@ -154,7 +154,8 @@ class ValidationPipeline:
         self.cost_model = cost_model or TransactionCostModel()
 
     def run(
-        self, hypotheses: list[Hypothesis], data: pd.DataFrame
+        self, hypotheses: list[Hypothesis], data: pd.DataFrame,
+        wf_data: pd.DataFrame | None = None,
     ) -> ValidationReport:
         """Run the full validation pipeline.
 
@@ -163,13 +164,19 @@ class ValidationPipeline:
         hypotheses : list[Hypothesis]
             Hypotheses that passed initial statistical testing.
         data : pd.DataFrame
-            Full OHLCV + features DataFrame.
+            Full OHLCV + features DataFrame (used for OOS, regime, costs).
+        wf_data : pd.DataFrame or None, optional
+            Data subset for walk-forward validation (excludes OOS holdout).
+            If None, uses ``data`` for backward compatibility.
 
         Returns
         -------
         ValidationReport
             Complete report with surviving hypotheses and rejection funnel.
         """
+        if wf_data is None:
+            wf_data = data
+
         funnel = RejectionFunnel(initial_count=len(hypotheses))
         all_wf_results: list[WalkForwardResult] = []
         all_oos_results: list[OOSResult] = []
@@ -180,11 +187,11 @@ class ValidationPipeline:
             "Starting validation pipeline with %d hypotheses", len(hypotheses)
         )
 
-        # Stage 1: Walk-forward validation
+        # Stage 1: Walk-forward validation (uses wf_data to avoid OOS overlap)
         logger.info("Stage 1: Walk-forward validation")
         wf_survivors: list[Hypothesis] = []
         for hyp in hypotheses:
-            result = self.wf_validator.validate(hyp, data)
+            result = self.wf_validator.validate(hyp, wf_data)
             all_wf_results.append(result)
             if result.passed:
                 wf_survivors.append(hyp)

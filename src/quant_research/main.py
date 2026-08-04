@@ -197,19 +197,25 @@ def run_pipeline(config: dict | None = None) -> PipelineResult:
         return result
 
     # Step 7: Run validation pipeline on survivors
+    # Use only train+validation data (first 80%) for walk-forward to prevent
+    # overlap with the OOS holdout (last 20-25%).
     logger.info("Step 7: Running validation pipeline")
     validation_report = None
     try:
         if not statistical_survivors:
             logger.warning("No hypotheses survived statistical testing")
         else:
+            oos_holdout_fraction = 0.25
+            wf_data = full_data.iloc[:int(len(full_data) * (1 - oos_holdout_fraction))]
             pipeline = ValidationPipeline(
                 walk_forward_validator=WalkForwardValidator(n_folds=3),
-                oos_validator=OutOfSampleValidator(holdout_fraction=0.25),
+                oos_validator=OutOfSampleValidator(holdout_fraction=oos_holdout_fraction),
                 regime_analyzer=RegimeAnalyzer(),
                 cost_model=TransactionCostModel(),
             )
-            validation_report = pipeline.run(statistical_survivors, full_data)
+            validation_report = pipeline.run(
+                statistical_survivors, full_data, wf_data=wf_data
+            )
             validated_hyps = [
                 vh.hypothesis
                 for vh in validation_report.validated_hypotheses
@@ -222,8 +228,10 @@ def run_pipeline(config: dict | None = None) -> PipelineResult:
             )
     except Exception as e:
         logger.error("Validation pipeline failed: %s", e)
+        raise
 
     # Step 8: Design entry/exit rules for final survivors
+    # Backtest only on train_data to avoid leaking holdout information.
     logger.info("Step 8: Designing strategy rules")
     strategy_results: list[dict] = []
     try:
@@ -231,7 +239,7 @@ def run_pipeline(config: dict | None = None) -> PipelineResult:
             designer = EntryExitDesigner()
             for hyp in result.validated_survivors:
                 rules = designer.design_rules(hyp, train_data)
-                bt_result = designer.backtest_rules(rules, hyp, full_data)
+                bt_result = designer.backtest_rules(rules, hyp, train_data)
                 strategy_results.append({
                     "hypothesis_id": hyp.id,
                     "rules": {
@@ -250,17 +258,23 @@ def run_pipeline(config: dict | None = None) -> PipelineResult:
             logger.info("Designed strategies for %d hypotheses", len(strategy_results))
     except Exception as e:
         logger.error("Strategy design failed: %s", e)
+        raise
 
     # Step 9: Apply position sizing (half-Kelly)
+    # Use per-trade average win/loss magnitudes for Kelly criterion,
+    # not expectancy (which combines wins and losses) or max_drawdown
+    # (which is a path-dependent statistic, not per-trade loss).
     logger.info("Step 9: Computing position sizes")
     try:
         sizer = PositionSizer()
         for sr in strategy_results:
             metrics = sr.get("backtest_metrics", {})
             hit_rate = metrics.get("hit_rate", 0.5)
-            # Use simple estimates for Kelly
-            avg_win = max(metrics.get("expectancy", 0.001), 0.001)
-            avg_loss = max(abs(metrics.get("max_drawdown", 0.01)), 0.001)
+            # Compute avg_win and avg_loss from trade-level data
+            # avg_win: average magnitude of winning trades
+            # avg_loss: average magnitude of losing trades
+            avg_win = max(metrics.get("avg_win", 0.001), 0.001)
+            avg_loss = max(abs(metrics.get("avg_loss", 0.01)), 0.001)
             position_size = sizer.kelly_criterion(
                 win_rate=hit_rate,
                 avg_win=avg_win,
@@ -271,6 +285,7 @@ def run_pipeline(config: dict | None = None) -> PipelineResult:
         logger.info("Position sizes computed")
     except Exception as e:
         logger.error("Position sizing failed: %s", e)
+        raise
 
     # Step 10: Apply risk controls
     logger.info("Step 10: Applying risk controls")
@@ -296,6 +311,7 @@ def run_pipeline(config: dict | None = None) -> PipelineResult:
         )
     except Exception as e:
         logger.error("Risk controls failed: %s", e)
+        raise
 
     # Step 11: Generate report
     logger.info("Step 11: Generating report")

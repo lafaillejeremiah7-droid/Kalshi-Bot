@@ -221,6 +221,8 @@ class HypothesisRejector:
                 rejected = True
 
             # Special handling for ORDER_FLOW_PROXY category
+            # These hypotheses are still rejected if they fail criteria,
+            # but flagged as limited_data_confidence for reporting purposes.
             if hyp.category == HypothesisCategory.ORDER_FLOW_PROXY:
                 if rejected:
                     confidence_flag = "limited_data_confidence"
@@ -229,8 +231,6 @@ class HypothesisRejector:
                         "These signals are inferred from OHLCV and cannot represent "
                         "true order book data."
                     )
-                    # Do not outright reject - flag instead
-                    rejected = False
 
             result = RejectionResult(
                 hypothesis_id=hyp.id,

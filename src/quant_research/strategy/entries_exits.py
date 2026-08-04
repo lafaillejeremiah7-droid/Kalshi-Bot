@@ -433,6 +433,8 @@ class EntryExitDesigner:
                 "max_drawdown": 0.0,
                 "expectancy": 0.0,
                 "total_return": 0.0,
+                "avg_win": 0.0,
+                "avg_loss": 0.0,
             }
 
         active_returns = returns[returns != 0]
@@ -442,10 +444,18 @@ class EntryExitDesigner:
         expectancy = self.tester.expectancy(active_returns)
         total_return = float(returns.sum())
 
+        # Per-trade average win and average loss magnitudes for Kelly sizing
+        winning_trades = active_returns[active_returns > 0]
+        losing_trades = active_returns[active_returns < 0]
+        avg_win = float(winning_trades.mean()) if len(winning_trades) > 0 else 0.0
+        avg_loss = float(losing_trades.abs().mean()) if len(losing_trades) > 0 else 0.0
+
         return {
             "sharpe_ratio": sharpe,
             "hit_rate": hit_rate,
             "max_drawdown": max_dd,
             "expectancy": expectancy,
             "total_return": total_return,
+            "avg_win": avg_win,
+            "avg_loss": avg_loss,
         }
