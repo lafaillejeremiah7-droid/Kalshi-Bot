@@ -2,7 +2,7 @@
   "id": "FEAT-001",
   "type": "docs",
   "description": "Comprehensive audit of the research architecture: verify all 103 signals for look-ahead bias, feature correctness, proper labeling, and produce a structured signal catalog document at results/signal_audit.md",
-  "status": "completed",
+  "status": "in_progress",
   "steps": [
     "Create results/ directory at project root if it does not exist",
     "Audit every signal function in src/quant_research/hypotheses/signals.py for look-ahead bias. Each signal must use only .shift(positive) or rolling windows looking backwards. Flag any signal using .shift(negative) or accessing future data. The forward return computation in statistical.py (shift(-forward_period)) is correct and expected - what matters is that the signal itself does not peek ahead.",

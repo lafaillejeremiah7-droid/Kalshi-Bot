@@ -490,3 +490,115 @@ class TestHypothesisRejector:
         assert len(rejected) == 1
         assert rejected[0].hypothesis_id == "B"
 
+
+# ---------------------------------------------------------------------------
+# Regression Test: pre_holiday_bullishness (SE_007) fires on correct bar
+# ---------------------------------------------------------------------------
+
+
+class TestPreHolidayBullishnessRegression:
+    """Regression tests for the pre_holiday_bullishness signal (SE_007).
+
+    After the look-ahead bias fix, this signal detects post-holiday sessions
+    (first day back after a multi-day break) using backward-looking date gaps.
+    The function name is retained for backward compatibility.
+    """
+
+    def test_signal_fires_on_post_holiday_bar(self) -> None:
+        """Signal should be 1.0 on the day AFTER a >3 calendar-day gap."""
+        from quant_research.hypotheses.signals import pre_holiday_bullishness
+
+        # Build a 10-bar DataFrame with a known holiday gap.
+        # Days: Mon 2024-01-08 through Fri 2024-01-12 (5 normal days),
+        # then skip weekend + MLK Monday = next bar is Tue 2024-01-16 (4-day gap).
+        # Then Wed 2024-01-17 through Fri 2024-01-19 (3 more normal days).
+        dates = pd.to_datetime([
+            "2024-01-08",  # Mon
+            "2024-01-09",  # Tue
+            "2024-01-10",  # Wed
+            "2024-01-11",  # Thu
+            "2024-01-12",  # Fri
+            "2024-01-16",  # Tue (4-day gap: Sat+Sun+Mon holiday)
+            "2024-01-17",  # Wed
+            "2024-01-18",  # Thu
+            "2024-01-19",  # Fri
+        ])
+        df = pd.DataFrame(
+            {"Close": np.linspace(100, 109, len(dates))},
+            index=dates,
+        )
+
+        signal = pre_holiday_bullishness(df)
+
+        # The post-holiday bar (2024-01-16) should fire
+        assert signal.loc[pd.Timestamp("2024-01-16")] == 1.0
+
+    def test_signal_does_not_fire_on_pre_holiday_bar(self) -> None:
+        """Signal must NOT fire on the last day before the holiday gap."""
+        from quant_research.hypotheses.signals import pre_holiday_bullishness
+
+        dates = pd.to_datetime([
+            "2024-01-08",
+            "2024-01-09",
+            "2024-01-10",
+            "2024-01-11",
+            "2024-01-12",  # Last day before gap - must NOT fire
+            "2024-01-16",  # Post-holiday bar
+            "2024-01-17",
+            "2024-01-18",
+            "2024-01-19",
+        ])
+        df = pd.DataFrame(
+            {"Close": np.linspace(100, 109, len(dates))},
+            index=dates,
+        )
+
+        signal = pre_holiday_bullishness(df)
+
+        # The pre-holiday bar (2024-01-12, last day before the gap) must be 0
+        assert signal.loc[pd.Timestamp("2024-01-12")] == 0.0
+
+    def test_signal_zero_for_normal_weekday_gaps(self) -> None:
+        """Normal 1-day gaps (consecutive business days) should not fire."""
+        from quant_research.hypotheses.signals import pre_holiday_bullishness
+
+        # Mon-Fri, no holidays: all gaps are 1 day (or 3 for weekend)
+        dates = pd.bdate_range("2024-02-05", periods=10, freq="B")
+        df = pd.DataFrame(
+            {"Close": np.linspace(100, 110, len(dates))},
+            index=dates,
+        )
+
+        signal = pre_holiday_bullishness(df)
+
+        # No bar should fire (max gap is 3 days for a standard weekend)
+        assert signal.sum() == 0.0
+
+    def test_signal_fires_on_multiple_holidays(self) -> None:
+        """Multiple holiday gaps in the series should each fire independently."""
+        from quant_research.hypotheses.signals import pre_holiday_bullishness
+
+        dates = pd.to_datetime([
+            "2024-01-02",  # Tue (after New Year)
+            "2024-01-03",
+            "2024-01-04",
+            "2024-01-05",
+            "2024-01-12",  # Fri (7-day gap from Jan-05 -> Jan-12)
+            "2024-01-15",
+            "2024-01-16",
+            "2024-01-22",  # Mon (7-day gap from Jan-16 -> Jan-22)
+            "2024-01-23",
+        ])
+        df = pd.DataFrame(
+            {"Close": np.linspace(100, 109, len(dates))},
+            index=dates,
+        )
+
+        signal = pre_holiday_bullishness(df)
+
+        # Both post-gap bars should fire
+        assert signal.loc[pd.Timestamp("2024-01-12")] == 1.0
+        assert signal.loc[pd.Timestamp("2024-01-22")] == 1.0
+        # Total signals fired should be exactly 2
+        assert signal.sum() == 2.0
+

@@ -22,7 +22,7 @@
 | Check | Result | Detail |
 |-------|--------|--------|
 | Signal functions use only backward-looking ops | PASS (102/103) | All use .shift(positive), .rolling(), .ewm(), .cumsum() |
-| `pre_holiday_bullishness` (SE_007) | FIXED | Used .shift(-1) on day_diff (look-ahead). Converted to post-holiday detection using backward .diff() |
+| `pre_holiday_bullishness` (SE_007) | FIXED | Used .shift(-1) on day_diff (look-ahead). Converted to post-holiday detection using backward .diff(). Generator metadata renamed to "Post-Holiday Bullishness" to match new semantics. |
 | `unfilled_gap_support` (GAP_005) | PASS | Iterates range(5, len(df)), looks at gap.iloc[max(0,i-20):i] (backward only) |
 | `holiday_gap_effect` (GAP_007) | PASS | Uses .diff().dt.days on index (backward-looking day difference) |
 | StatisticalTester forward returns | CORRECT | shift(-forward_period) for forward returns is proper backtesting methodology |
@@ -203,7 +203,7 @@ Total: 103 signals across 8 categories
 | SE_004 | January Effect | `month_of_year_january` | Close | 1-day (default) | None explicit | None identified | OHLCV-based |
 | SE_005 | September Weakness | `month_of_year_september` | Close | 1-day (default) | None explicit | None identified | OHLCV-based |
 | SE_006 | Turn of Month | `turn_of_month` | Close | 1-day (default) | None explicit | None identified | OHLCV-based |
-| SE_007 | Pre-Holiday Bullishness | `pre_holiday_bullishness` | Close | 1-day (default) | None explicit | FIXED: Was using .shift(-1). Now backward-looking. | OHLCV-based |
+| SE_007 | Post-Holiday Bullishness | `pre_holiday_bullishness` | Close | 1-day (default) | None explicit | FIXED: Was using .shift(-1). Now backward-looking. Generator metadata updated to reflect post-holiday semantics (function name retained for API compatibility). | OHLCV-based |
 | SE_008 | Options Expiration Week | `options_expiration_week` | Close | 1-day (default) | shifts: 5 | None identified | OHLCV-based |
 | SE_009 | Quarter-End Rebalancing | `quarter_end_rebalancing` | Close | 1-day (default) | None explicit | None identified | OHLCV-based |
 | SE_010 | Sell in May | `sell_in_may` | Close | 1-day (default) | None explicit | None identified | OHLCV-based |
@@ -482,7 +482,7 @@ see this future return.
 
 The research architecture is sound with one issue found and fixed:
 
-1. **Fixed:** `pre_holiday_bullishness` look-ahead bias (shift(-1) on dates)
+1. **Fixed:** `pre_holiday_bullishness` look-ahead bias (shift(-1) on dates). Generator metadata updated: renamed to "Post-Holiday Bullishness" with corrected description and economic rationale. Function name retained for backward compatibility.
 2. **Confirmed:** All other 102 signals are backward-looking only
 3. **Confirmed:** FeatureEngine computes all features without lookahead
 4. **Confirmed:** Order flow signals properly labeled as OHLCV proxies
