@@ -2,7 +2,7 @@
   "id": "FEAT-004",
   "type": "feat",
   "description": "Strategy design module (entries, exits, position sizing, risk controls) for validated hypotheses, and the main pipeline orchestrator that runs the complete research process end-to-end with comprehensive reporting.",
-  "status": "in_progress",
+  "status": "completed",
   "steps": [
     "Create src/quant_research/strategy/entries_exits.py - EntryExitDesigner class: for each validated hypothesis, designs entry rules (signal threshold, confirmation requirements, filter conditions), designs exit rules (time-based exit, signal reversal, trailing stop, profit target, stop-loss), supports multiple exit types: fixed stop/target, ATR-based adaptive stops, trailing stops, time-decay exits, tests combinations of entry/exit rules on in-sample data, selects best entry/exit combination based on risk-adjusted returns not raw returns",
     "Create src/quant_research/strategy/position_sizing.py - PositionSizer class: implements multiple position sizing methods: fixed fractional (Kelly criterion), volatility-targeted (scale position to target vol), equal risk contribution, maximum drawdown-constrained, computes optimal position size for each strategy, enforces maximum position limits and portfolio-level risk budgets",
@@ -30,5 +30,5 @@
     "cd /projects/sandbox/yo && uv run python -c \"from quant_research.main import run_pipeline; print('Pipeline imports successfully')\""
   ],
   "blocked_reason": null,
-  "findings": ""
+  "findings": "All 129 tests pass (98 existing + 23 strategy tests + 8 integration tests). Pipeline imports and runs successfully with synthetic data. The volatility_target position sizer enforces max_position_fraction cap (20% default), which is by design. Integration tests use pre-supplied synthetic data to bypass yfinance API calls."
 }
