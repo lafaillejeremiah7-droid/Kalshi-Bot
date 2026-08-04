@@ -746,11 +746,18 @@ def turn_of_month(df: pd.DataFrame) -> pd.Series:
 
 
 def pre_holiday_bullishness(df: pd.DataFrame) -> pd.Series:
-    """Pre-holiday effect: day before multi-day break tends to be positive."""
-    day_diff = pd.Series(df.index, index=df.index).diff().shift(-1).dt.days
-    pre_holiday = day_diff > 3
+    """Post-holiday bullishness: first day back after multi-day break tends positive.
+
+    Original "pre-holiday" detection requires knowing tomorrow's date (look-ahead).
+    This implementation uses backward-looking data: if the gap between today and
+    the previous trading day exceeds 3 calendar days, today is post-holiday.
+    The economic rationale (short covering, optimism) applies similarly to
+    the session immediately following a holiday break.
+    """
+    day_diff = pd.Series(df.index, index=df.index).diff().dt.days
+    post_holiday = day_diff > 3
     signal = pd.Series(0.0, index=df.index)
-    signal[pre_holiday] = 1.0
+    signal[post_holiday] = 1.0
     return signal
 
 

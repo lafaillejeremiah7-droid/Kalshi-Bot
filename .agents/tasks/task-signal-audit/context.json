@@ -1,0 +1,28 @@
+{
+  "project_type": "Python quantitative research pipeline",
+  "language": "Python 3.11",
+  "build_system": "uv (hatchling backend)",
+  "test_framework": "pytest with conftest.py fixtures",
+  "build_command": "uv sync",
+  "test_command": "uv run pytest tests/ -v",
+  "verification_instructions": "1. Run 'uv run pytest tests/ -v' and confirm all 129+ tests pass. 2. Verify any new audit outputs exist at expected paths.",
+  "snapshot_or_generated_files": null,
+  "setup_instructions": "uv sync installs all dependencies from uv.lock",
+  "environment_constraints": "OPEN_INTERNET - full network access. Python 3.11 with uv package manager.",
+  "contribution_requirements": "All code changes on branch feat/quant-research-pipeline. Maintain existing test coverage.",
+  "key_patterns": "Signal functions in src/quant_research/hypotheses/signals.py take DataFrame(OHLCV+features) -> pd.Series. Hypothesis dataclass in catalog.py ties signals to metadata. HypothesisGenerator in generator.py creates all 103 hypotheses. StatisticalTester computes forward returns via shift(-forward_period) which correctly looks at future returns for backtesting. FeatureEngine uses only backward-looking windows. ORDER_FLOW_PROXY category explicitly labeled as OHLCV-derived proxies.",
+  "relevant_files": [
+    "src/quant_research/hypotheses/signals.py",
+    "src/quant_research/hypotheses/generator.py",
+    "src/quant_research/hypotheses/catalog.py",
+    "src/quant_research/data/features.py",
+    "src/quant_research/testing/statistical.py",
+    "src/quant_research/testing/rejection.py",
+    "src/quant_research/validation/pipeline.py",
+    "src/quant_research/validation/walk_forward.py",
+    "src/quant_research/validation/out_of_sample.py",
+    "src/quant_research/main.py",
+    "src/quant_research/strategy/entries_exits.py"
+  ],
+  "directory_structure": "src/quant_research/ contains: data/ (fetcher.py, features.py), hypotheses/ (signals.py, generator.py, catalog.py), testing/ (statistical.py, rejection.py), validation/ (pipeline.py, walk_forward.py, out_of_sample.py), robustness/ (regime_analysis.py, transaction_costs.py), strategy/ (entries_exits.py, position_sizing.py, risk_controls.py), reporting/ (results.py), main.py. tests/ contains 5 test files with 129 tests. No results/ directory exists yet."
+}

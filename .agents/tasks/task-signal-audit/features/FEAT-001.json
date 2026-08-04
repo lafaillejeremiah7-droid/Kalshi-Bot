@@ -1,0 +1,38 @@
+{
+  "id": "FEAT-001",
+  "type": "docs",
+  "description": "Comprehensive audit of the research architecture: verify all 103 signals for look-ahead bias, feature correctness, proper labeling, and produce a structured signal catalog document at results/signal_audit.md",
+  "status": "in_progress",
+  "steps": [
+    "Create results/ directory at project root if it does not exist",
+    "Audit every signal function in src/quant_research/hypotheses/signals.py for look-ahead bias. Each signal must use only .shift(positive) or rolling windows looking backwards. Flag any signal using .shift(negative) or accessing future data. The forward return computation in statistical.py (shift(-forward_period)) is correct and expected - what matters is that the signal itself does not peek ahead.",
+    "Verify that pre_holiday_bullishness uses shift(-1) on the day_diff to detect next-day gap and determine if this constitutes look-ahead (it checks future day_diff to know today is pre-holiday). Document the finding and fix if needed.",
+    "Verify that unfilled_gap_support iterates over range(5, len(df)) and only looks at gap.iloc[max(0,i-20):i] which is backward-looking. Document finding.",
+    "Verify that all features in src/quant_research/data/features.py are computed without lookahead - all use .shift(positive_n), .rolling(), .ewm() which are backward-looking. Document.",
+    "Confirm that ORDER_FLOW_PROXY signals (OF_001 through OF_016 in generator.py) are all explicitly labeled with ORDER_FLOW_LIMITATION disclaimer noting they are OHLCV-derived, not true order flow. Document in audit.",
+    "Confirm that MICROSTRUCTURE_PROXY signals (MS_001 through MS_012) have appropriate data_limitations text. Document.",
+    "Verify the pipeline enforces chronological splits: main.py splits 60/20/20 chronologically (iloc[:train_end], etc.), WalkForwardValidator uses expanding/rolling forward-only folds, OOS uses final holdout_fraction from the end.",
+    "Verify that failed hypotheses are retained: HypothesisRejector.get_rejected() returns rejected results with reasons, they are not deleted.",
+    "Verify BH FDR correction: rejector.evaluate_all() applies BH across ALL 103 p-values simultaneously before rejecting.",
+    "Verify strategy optimization (entries_exits.py, position_sizing.py) only runs on validated_survivors after full validation pipeline (Steps 8-10 in main.py only execute for result.validated_survivors).",
+    "Verify each hypothesis is logged before evaluation: the main pipeline logs 'Generated N hypotheses' and 'Running statistical tests' before any evaluation begins.",
+    "Produce the comprehensive structured signal catalog document at results/signal_audit.md containing: (1) Full list of all 103 signal functions grouped by category, (2) Data required by each signal, (3) Prediction horizon for each signal (all use forward_period=1 by default in the pipeline), (4) Parameters used by each signal (lookback windows, thresholds), (5) Look-ahead or leakage risks identified, (6) Which signals use genuine order-flow vs OHLCV-derived proxies, (7) Summary of architecture audit findings for each verification point above."
+  ],
+  "acceptance_criteria": [
+    "results/signal_audit.md exists and contains a complete catalog of all 103 signals with all 6 requested data points per signal",
+    "The audit document has a section on look-ahead bias findings with specific signal names and line references",
+    "The audit document has a section confirming (or flagging issues with) chronological data splitting",
+    "The audit document has a section on ORDER_FLOW_PROXY vs genuine order flow labeling",
+    "The audit document has a section on multiple-testing bias (BH FDR) coverage",
+    "The audit document confirms strategy optimization does not begin until OOS validation passes",
+    "Any code fixes for actual look-ahead bugs found are applied to signals.py",
+    "Running 'uv run pytest tests/ -v' passes all existing tests"
+  ],
+  "verification": [
+    "uv run pytest tests/ -v",
+    "test -f results/signal_audit.md && echo 'Audit file exists'",
+    "grep -c '|' results/signal_audit.md to confirm tables are present"
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}
