@@ -1,0 +1,35 @@
+{
+  "id": "FEAT-001",
+  "type": "feat",
+  "description": "Project scaffolding, dependency setup, and data acquisition module. Establish the full project structure with pyproject.toml, all package directories, and build a data fetcher that downloads 10+ years of NASDAQ data (QQQ, TQQQ, and constituent proxies) via yfinance. Include data validation and caching.",
+  "status": "in_progress",
+  "steps": [
+    "Set Python version to 3.11.15 via pyenv local in /projects/sandbox/yo",
+    "Create pyproject.toml with dependencies: pandas, numpy, scipy, statsmodels, scikit-learn, yfinance, matplotlib, seaborn, tabulate, pytest, ruff",
+    "Create src/quant_research/__init__.py with package version",
+    "Create full directory structure: src/quant_research/{data,hypotheses,testing,validation,strategy,robustness,reporting}/ each with __init__.py",
+    "Create tests/ directory with conftest.py providing shared fixtures (sample OHLCV dataframes)",
+    "Create src/quant_research/data/fetcher.py - DataFetcher class that: downloads NASDAQ data (QQQ as primary proxy, also ^IXIC) for 10 years via yfinance, validates data completeness, handles missing values, caches to local parquet files in data/cache/, provides train/test split functionality",
+    "Create src/quant_research/data/features.py - FeatureEngine class that computes derived features from OHLCV: returns at multiple horizons, volatility measures (realized vol, Parkinson, Garman-Klass), volume metrics (relative volume, volume MA ratios, VWAP proxy), gap measurements (overnight gaps), session indicators (day of week, month, quarter), technical indicators (RSI, MACD, Bollinger Bands, ATR)",
+    "Create tests/test_data.py with tests for DataFetcher (mock yfinance) and FeatureEngine (using fixture data)",
+    "Create .gitignore with appropriate entries (data/cache/, results/, __pycache__, .pyenv, etc.)",
+    "Create a .python-version file set to 3.11.15",
+    "Run uv sync to install all dependencies and verify the environment works",
+    "Run pytest to verify tests pass"
+  ],
+  "acceptance_criteria": [
+    "pyproject.toml exists with all required dependencies",
+    "uv sync completes without errors",
+    "All package directories exist with __init__.py files",
+    "DataFetcher can download and cache NASDAQ data",
+    "FeatureEngine computes all specified derived features from OHLCV data",
+    "pytest tests/test_data.py passes all tests",
+    "Data limitations are documented in module docstrings - explicitly noting that OHLCV+volume cannot provide true order flow data"
+  ],
+  "verification": [
+    "cd /projects/sandbox/yo && uv sync",
+    "cd /projects/sandbox/yo && uv run pytest tests/test_data.py -v"
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}

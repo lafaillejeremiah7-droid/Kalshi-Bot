@@ -1,0 +1,34 @@
+{
+  "id": "FEAT-004",
+  "type": "feat",
+  "description": "Strategy design module (entries, exits, position sizing, risk controls) for validated hypotheses, and the main pipeline orchestrator that runs the complete research process end-to-end with comprehensive reporting.",
+  "status": "pending",
+  "steps": [
+    "Create src/quant_research/strategy/entries_exits.py - EntryExitDesigner class: for each validated hypothesis, designs entry rules (signal threshold, confirmation requirements, filter conditions), designs exit rules (time-based exit, signal reversal, trailing stop, profit target, stop-loss), supports multiple exit types: fixed stop/target, ATR-based adaptive stops, trailing stops, time-decay exits, tests combinations of entry/exit rules on in-sample data, selects best entry/exit combination based on risk-adjusted returns not raw returns",
+    "Create src/quant_research/strategy/position_sizing.py - PositionSizer class: implements multiple position sizing methods: fixed fractional (Kelly criterion), volatility-targeted (scale position to target vol), equal risk contribution, maximum drawdown-constrained, computes optimal position size for each strategy, enforces maximum position limits and portfolio-level risk budgets",
+    "Create src/quant_research/strategy/risk_controls.py - RiskController class: implements portfolio-level risk controls: maximum portfolio heat (total risk budget), correlation-based position limits (reduce size when strategies are correlated), drawdown circuit breaker (reduce size after X% drawdown), regime-based scaling (reduce in high-vol regimes), daily/weekly loss limits, tracks strategy-level and portfolio-level metrics",
+    "Create src/quant_research/reporting/results.py - ResearchReporter class: generates comprehensive research report with: executive summary (how many hypotheses generated, tested, survived), detailed results for each surviving hypothesis (signal description, economic rationale, data limitations, in-sample stats, out-of-sample stats, regime analysis, net-of-cost performance), comparison table across all surviving strategies, data transparency section (explicitly noting what data was used and what limitations exist, especially re: order flow), visualizations: equity curves, drawdown charts, regime performance heatmap, hypothesis rejection funnel chart, saves report as markdown + CSV summary tables in results/ directory",
+    "Create src/quant_research/main.py - main pipeline orchestrator: fetches data via DataFetcher, computes features via FeatureEngine, generates hypotheses via HypothesisGenerator, runs initial statistical tests via StatisticalTester, applies rejection criteria via HypothesisRejector, validates survivors via ValidationPipeline (walk-forward + OOS + regime + costs), designs strategies for final survivors via EntryExitDesigner + PositionSizer + RiskController, generates final report via ResearchReporter, includes comprehensive logging throughout, handles errors gracefully with partial results reported, prints a data limitations disclaimer at the start acknowledging OHLCV-only constraints",
+    "Create tests/test_strategy.py - Test EntryExitDesigner produces valid entry/exit rules, test PositionSizer computes reasonable position sizes, test RiskController enforces limits correctly",
+    "Create tests/test_main.py - Integration test that runs the pipeline on a small synthetic dataset to verify all components connect correctly (mock yfinance, use 1 year of generated data with a known signal embedded)",
+    "Update README.md with project description, setup instructions, usage guide, architecture overview, and data limitations disclaimer",
+    "Run full test suite to verify everything passes"
+  ],
+  "acceptance_criteria": [
+    "EntryExitDesigner produces entry and exit rules for each validated hypothesis",
+    "PositionSizer implements at least Kelly criterion and volatility-targeting",
+    "RiskController enforces portfolio-level constraints",
+    "ResearchReporter generates a markdown report with all specified sections",
+    "main.py orchestrates the full pipeline from data fetch to final report",
+    "README.md documents the project architecture, usage, and data limitations",
+    "Data limitations disclaimer is prominently displayed (noting OHLCV cannot provide true order flow)",
+    "pytest tests/ passes all tests including integration test",
+    "Pipeline handles edge cases (no surviving hypotheses, insufficient data) gracefully"
+  ],
+  "verification": [
+    "cd /projects/sandbox/yo && uv run pytest tests/ -v",
+    "cd /projects/sandbox/yo && uv run python -c \"from quant_research.main import run_pipeline; print('Pipeline imports successfully')\""
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}

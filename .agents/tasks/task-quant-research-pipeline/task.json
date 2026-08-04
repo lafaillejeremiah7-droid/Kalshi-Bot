@@ -1,0 +1,7 @@
+{
+  "task_id": "task-quant-research-pipeline",
+  "task_description": "Build a comprehensive quantitative research pipeline that generates 100+ market hypotheses, statistically tests each one, rejects weak hypotheses, validates strong hypotheses with walk-forward and out-of-sample testing, designs entry/exit/position-sizing rules for validated edges, and performs final robustness testing with realistic transaction costs. Uses NASDAQ data from yfinance and honestly acknowledges data limitations (OHLCV only, no true order flow).",
+  "status": "in_progress",
+  "feature_order": ["FEAT-001", "FEAT-002", "FEAT-003", "FEAT-004"],
+  "blocked_reason": null
+}

@@ -1,0 +1,28 @@
+{
+  "id": "FEAT-002",
+  "type": "feat",
+  "description": "Hypothesis generation engine that produces 100+ market behavior hypotheses across multiple categories (momentum, mean reversion, volatility, gaps, session effects, order flow proxies, regime-based, cross-asset), and a statistical testing framework that evaluates each hypothesis for significance with multiple-testing correction.",
+  "status": "pending",
+  "steps": [
+    "Create src/quant_research/hypotheses/catalog.py - Define a Hypothesis dataclass with fields: id, category, name, description, economic_rationale, data_requirements, signal_function (callable), expected_direction, data_limitations (explicitly note when hypothesis requires data not available in OHLCV). Define HypothesisCategory enum: MOMENTUM, MEAN_REVERSION, VOLATILITY, GAPS, SESSION_EFFECTS, ORDER_FLOW_PROXY, REGIME, CROSS_ASSET, MICROSTRUCTURE_PROXY",
+    "Create src/quant_research/hypotheses/generator.py - HypothesisGenerator class that programmatically generates 100+ hypotheses across all categories. Each hypothesis must include: a signal computation function, economic rationale for why the edge might persist, clear documentation of data limitations. Categories and approximate counts: Momentum (15+ variants: 1/5/10/20/60/120/252 day, dual momentum, momentum with vol scaling, sector rotation proxy, momentum crashes), Mean Reversion (15+ variants: RSI extremes, Bollinger band mean reversion, gap fill tendency, multi-day reversion, volatility mean reversion, volume-weighted reversion), Volatility (15+ variants: vol expansion breakouts, vol compression setups, vol clustering, VIX-analog effects, realized vs implied proxy, vol regime persistence, GARCH-based), Gaps (10+ variants: overnight gap size, gap fill probability by size/direction, gap and go, unfilled gap as support/resistance, Monday gaps), Session Effects (10+ variants: day-of-week, month-of-year, turn-of-month, holiday effect, options expiration, quarter-end, January effect, Santa rally, sell-in-May), Order Flow Proxies from OHLCV (15+ variants: volume imbalance, up-volume vs down-volume ratio, OBV divergence, price-volume confirmation, volume at extremes, buying/selling pressure proxy using close position in range, Chaikin money flow, accumulation/distribution, volume profile proxy, tick rule proxy), Regime/Market Structure (10+ variants: trend vs range detection, volatility regime, correlation regime, drawdown recovery, breadth proxy, market stress indicators), Microstructure Proxies (10+ variants: bar range analysis, candle body/wick ratios, consecutive direction analysis, intraday range expansion from daily bars, opening range proxy)",
+    "Create src/quant_research/testing/statistical.py - StatisticalTester class with methods: compute_signal_returns(hypothesis, data) -> pd.Series of returns conditional on signal, t_test_mean_return(returns) -> (t_stat, p_value), bootstrap_test(returns, n_iterations=10000) -> confidence_interval, permutation_test(signal, returns, n_permutations=5000) -> p_value, compute_sharpe_ratio(returns) -> float, compute_information_ratio(signal_returns, benchmark_returns) -> float, compute_max_drawdown(cumulative_returns) -> float, profit_factor(returns) -> float, expectancy(returns) -> float",
+    "Create src/quant_research/testing/rejection.py - HypothesisRejector class that: applies Benjamini-Hochberg FDR correction for multiple testing, rejects hypotheses with adjusted p-value > 0.05, rejects hypotheses with Sharpe < 0.3 (pre-costs), rejects hypotheses with fewer than 30 observations, rejects hypotheses where economic rationale is 'order_flow' but data is OHLCV-only (flag as 'insufficient data' rather than reject - transparently noting the limitation), computes effect sizes and minimum detectable effects, reports rejection reasons clearly",
+    "Create src/quant_research/hypotheses/signals.py - Implement all signal computation functions referenced by the hypothesis catalog. Each function takes a DataFrame with OHLCV+features and returns a signal Series (values in {-1, 0, 1} or continuous)",
+    "Create tests/test_hypotheses.py - Test hypothesis generation produces 100+ hypotheses, test each category has at least 5 hypotheses, test signal functions produce valid output on sample data, test StatisticalTester methods with known distributions, test HypothesisRejector correctly applies FDR correction",
+    "Run pytest to verify all tests pass"
+  ],
+  "acceptance_criteria": [
+    "HypothesisGenerator.generate_all() returns 100+ hypotheses",
+    "Each hypothesis has id, category, name, description, economic_rationale, signal_function, and data_limitations fields",
+    "Order flow proxy hypotheses explicitly state they are inferred from OHLCV and cannot represent true order book data",
+    "StatisticalTester correctly computes t-tests, bootstrap CIs, permutation tests, and performance metrics",
+    "HypothesisRejector applies Benjamini-Hochberg correction and rejects weak hypotheses with clear reasons",
+    "pytest tests/test_hypotheses.py passes all tests"
+  ],
+  "verification": [
+    "cd /projects/sandbox/yo && uv run pytest tests/test_hypotheses.py -v"
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}
