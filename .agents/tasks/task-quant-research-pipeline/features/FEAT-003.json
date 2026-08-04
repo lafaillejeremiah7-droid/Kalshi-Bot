@@ -2,7 +2,7 @@
   "id": "FEAT-003",
   "type": "feat",
   "description": "Walk-forward validation, out-of-sample testing, and regime-aware robustness framework. Implements the validation pipeline that separates surviving hypotheses into those with genuine predictive power vs those that are overfit or regime-dependent.",
-  "status": "pending",
+  "status": "in_progress",
   "steps": [
     "Create src/quant_research/validation/walk_forward.py - WalkForwardValidator class: implements expanding-window and rolling-window walk-forward analysis, configurable train/test split ratios (default 80/20 with 5 folds), for each fold: train signal parameters on in-sample, test on out-of-sample, tracks performance stability across folds (Sharpe, hit rate, expectancy per fold), rejects hypotheses where out-of-sample performance degrades >50% vs in-sample, computes consistency ratio (fraction of folds with positive expectancy), requires consistency ratio >= 0.6 to pass",
     "Create src/quant_research/validation/out_of_sample.py - OutOfSampleValidator class: reserves final 20% of data as pure holdout (never touched during development), runs surviving hypotheses on holdout data, computes performance metrics on holdout, applies stricter thresholds on holdout (p < 0.01, Sharpe > 0.4), computes decay analysis (is the edge weakening over time?), tests hypothesis across different market regimes identified in the data",
