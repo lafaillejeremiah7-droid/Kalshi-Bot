@@ -17,6 +17,8 @@ class StrategyPick:
     analyst_agreement: int
     analyst_opposition: int
     regime_fit: float
+    timeframe_alignment: float = 0.5
+    macro_alignment: float = 0.5
 
     @property
     def label(self) -> str:
@@ -25,13 +27,7 @@ class StrategyPick:
 
 
 class StrategySelectorAgent:
-    """Selects the researched strategy with the strongest fit to the current market.
-
-    The research lab answers: "Which strategies have been robust out of sample?"
-    The analyst desks answer: "What does the market look like now?"
-    This agent combines the two and chooses one strategy.  It does not assume the
-    historically highest win-rate strategy is always the best strategy right now.
-    """
+    """Chooses the researched strategy most compatible with the market right now."""
 
     name = "Strategy Selection Desk"
 
@@ -41,6 +37,8 @@ class StrategySelectorAgent:
         "range": {"mean_reversion": 1.00, "trend": 0.52, "momentum": 0.55, "breakout": 0.48},
         "volatile": {"breakout": 0.92, "momentum": 0.86, "trend": 0.70, "mean_reversion": 0.38},
     }
+
+    TF_WEIGHTS = {"1min": 0.60, "5min": 0.80, "15min": 1.00, "1h": 1.30, "4h": 1.55}
 
     def __init__(self, min_probability: float = 0.66, min_agreement: int = 2) -> None:
         self.min_probability = min_probability
@@ -57,13 +55,37 @@ class StrategySelectorAgent:
         opposition_strength = sum(v.confidence for v in opposition) / max(1, len(opposition))
         return support_strength, opposition_strength, len(support), len(opposition)
 
-    def select(
-        self,
-        df: pd.DataFrame,
-        regime: str,
-        votes: list[AgentVote],
-        lab: StrategyResearchAgent,
-    ) -> StrategyPick | None:
+    def _timeframe_alignment(self, direction: Direction, votes: list[AgentVote]) -> float:
+        tf_votes = [v for v in votes if v.metadata.get("timeframe") in self.TF_WEIGHTS]
+        if not tf_votes:
+            return 0.50
+        signed = 0.0
+        total = 0.0
+        for vote in tf_votes:
+            weight = self.TF_WEIGHTS[vote.metadata["timeframe"]]
+            total += weight
+            if vote.direction == direction:
+                signed += weight * vote.confidence
+            elif vote.direction != Direction.HOLD:
+                signed -= weight * vote.confidence
+        return float(np.clip(0.5 + signed / max(total, 1e-9) * 0.5, 0.0, 1.0))
+
+    def _macro_alignment(self, direction: Direction, votes: list[AgentVote]) -> float:
+        macro = [v for v in votes if v.agent in {"USD Strength Desk", "Treasury Yield Desk"}]
+        if not macro:
+            return 0.50
+        signed = 0.0
+        active = 0
+        for vote in macro:
+            if vote.direction == Direction.HOLD:
+                continue
+            active += 1
+            signed += vote.confidence if vote.direction == direction else -vote.confidence
+        if active == 0:
+            return 0.50
+        return float(np.clip(0.5 + signed / active * 0.5, 0.0, 1.0))
+
+    def select(self, df: pd.DataFrame, regime: str, votes: list[AgentVote], lab: StrategyResearchAgent) -> StrategyPick | None:
         catalog = lab.catalog if lab.catalog else lab.top
         if not catalog:
             return None
@@ -79,17 +101,20 @@ class StrategySelectorAgent:
                 continue
 
             regime_fit = self._regime_fit(result.candidate.family, regime)
-            # OOS robustness is dominant; current-market fit and independent analyst
-            # confirmation decide which robust strategy should be active right now.
+            timeframe_alignment = self._timeframe_alignment(direction, votes)
+            macro_alignment = self._macro_alignment(direction, votes)
+
+            # Historical robustness remains dominant, but activation is conditional
+            # on current regime, independent analysts, higher timeframes and macro context.
             probability = (
-                result.valid_hit_rate * 0.38
-                + result.score * 0.26
-                + regime_fit * 0.18
-                + support * 0.18
-                - opposition * 0.14
+                result.valid_hit_rate * 0.31
+                + result.score * 0.20
+                + regime_fit * 0.14
+                + support * 0.13
+                + timeframe_alignment * 0.15
+                + macro_alignment * 0.07
+                - opposition * 0.12
             )
-            # Penalize small samples and train/validation instability again at the
-            # activation stage so a lucky backtest is less likely to be selected.
             sample_factor = float(np.clip(np.log1p(result.trades) / np.log(301), 0.55, 1.0))
             stability_gap = abs(result.train_hit_rate - result.valid_hit_rate)
             probability = probability * sample_factor - stability_gap * 0.18
@@ -102,6 +127,8 @@ class StrategySelectorAgent:
                 analyst_agreement=agreeing,
                 analyst_opposition=opposing,
                 regime_fit=regime_fit,
+                timeframe_alignment=timeframe_alignment,
+                macro_alignment=macro_alignment,
             )
             if best is None or pick.probability_score > best.probability_score:
                 best = pick
