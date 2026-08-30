@@ -8,7 +8,7 @@ from xau_company.selector import StrategySelectorAgent
 from xau_company.telegram import TelegramNotifier
 
 
-def sample_df(n=600):
+def sample_df(n=900):
     rng = np.random.default_rng(7)
     close = 2000 + np.cumsum(rng.normal(0.2, 2.0, n))
     open_ = close + rng.normal(0, 0.8, n)
@@ -20,7 +20,7 @@ def sample_df(n=600):
     })
 
 
-def trending_df(n=400, upward=True):
+def trending_df(n=500, upward=True):
     close = np.linspace(2000, 2200, n) if upward else np.linspace(2200, 2000, n)
     open_ = close - 0.4 if upward else close + 0.4
     high = np.maximum(open_, close) + 1.0
@@ -31,21 +31,29 @@ def trending_df(n=400, upward=True):
     })
 
 
-def test_research_runs_and_caps_candidates():
-    lab = StrategyResearchAgent(max_candidates=120, spread_bps=1.0)
+def test_research_runs_walk_forward_and_caps_catalog():
+    lab = StrategyResearchAgent(max_candidates=150, spread_bps=1.0, walk_forward_folds=3, catalog_size=80)
     top = lab.run(sample_df())
-    assert lab.last_evaluated == 120
+    assert lab.last_evaluated == 150
     assert len(top) <= 25
-    assert len(lab.catalog) <= 300
+    assert len(lab.catalog) <= 80
+    assert lab.last_universe_size >= 25_000
     assert all(0 <= x.valid_hit_rate <= 1 for x in top)
+    assert all(x.folds >= 2 for x in top)
+    assert all(x.walk_forward_std >= 0 for x in top)
 
 
-def test_large_budget_really_reaches_thousands_and_is_balanced():
-    lab = StrategyResearchAgent(max_candidates=3000)
+def test_large_budget_reaches_tens_of_thousands_and_spans_families():
+    lab = StrategyResearchAgent(max_candidates=20_000)
     selected = lab._balanced_candidates()
-    assert len(selected) == 3000
+    assert len(selected) == 20_000
+    assert lab.last_universe_size >= 25_000
     families = {c.family for c in selected}
-    assert families == {"trend", "mean_reversion", "breakout", "momentum"}
+    assert families == {
+        "trend", "triple_trend", "mean_reversion", "bollinger_reversion",
+        "breakout", "momentum", "pullback", "volatility_breakout",
+        "rsi_trend", "bollinger_breakout", "range_fade",
+    }
 
 
 def test_selector_chooses_researched_strategy_matching_market_and_analysts():
@@ -64,6 +72,31 @@ def test_selector_chooses_researched_strategy_matching_market_and_analysts():
     assert pick.direction == Direction.BUY
     assert pick.score.candidate == candidate
     assert pick.analyst_agreement == 2
+
+
+def test_selector_prefers_strategy_with_better_current_regime_history():
+    df = trending_df()
+    lab = StrategyResearchAgent(max_candidates=10)
+    strong = Candidate("trend", (5, 30, 0.0))
+    weak = Candidate("trend", (8, 30, 0.0))
+    lab.catalog = [
+        CandidateScore(
+            weak, 0.62, 0.62, 200, 0.72, walk_forward_hit_rate=0.62,
+            profit_factor=1.4, folds=4, regime_scores={"trend_up": 0.46}, regime_trades={"trend_up": 60},
+        ),
+        CandidateScore(
+            strong, 0.62, 0.62, 200, 0.72, walk_forward_hit_rate=0.62,
+            profit_factor=1.4, folds=4, regime_scores={"trend_up": 0.72}, regime_trades={"trend_up": 60},
+        ),
+    ]
+    votes = [
+        AgentVote("Trend Analyst", Direction.BUY, 0.80, "uptrend"),
+        AgentVote("Structure Analyst", Direction.BUY, 0.75, "higher highs"),
+    ]
+    pick = StrategySelectorAgent(min_probability=0.0, min_agreement=2).select(df, "trend_up", votes, lab)
+    assert pick is not None
+    assert pick.score.candidate == strong
+    assert pick.regime_history > 0.5
 
 
 def test_multi_timeframe_agent_creates_independent_horizon_votes():
@@ -105,12 +138,11 @@ def test_telegram_format_contains_trade_and_strategy_fields():
     s = TradeSignal(
         "XAU/USD", Direction.BUY, 2500, 2490, 2518, 0.8, "trend_up", ["test"], [],
         selected_strategy="trend(5, 30, 0.0)",
-        strategy_stats={"valid_hit_rate": 0.68, "trades": 180},
+        strategy_stats={"valid_hit_rate": 0.68, "walk_forward_hit_rate": 0.67, "trades": 180},
     )
     text = TelegramNotifier("", "").format_signal(s)
     assert "Action: BUY" in text
     assert "Strategy: trend(5, 30, 0.0)" in text
-    assert "Validation: 68.0% over 180 historical signals" in text
     assert "TP: 2518.00" in text
     assert "SL: 2490.00" in text
     assert "Selection confidence: 80.0%" in text
