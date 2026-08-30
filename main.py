@@ -17,7 +17,13 @@ def run() -> None:
     cfg = Settings()
     cfg.validate()
     market = TwelveDataClient(cfg.twelve_data_api_key)
-    lab = StrategyResearchAgent(cfg.max_candidates, cfg.spread_bps)
+    lab = StrategyResearchAgent(
+        max_candidates=cfg.max_candidates,
+        spread_bps=cfg.spread_bps,
+        walk_forward_folds=cfg.walk_forward_folds,
+        catalog_size=cfg.research_catalog_size,
+        min_walk_forward_folds=cfg.min_walk_forward_folds,
+    )
     boss = BossAgent(
         lab,
         cfg.min_confidence,
@@ -34,25 +40,23 @@ def run() -> None:
 
     while True:
         try:
-            # Fast context frames are refreshed every decision cycle.
             frames = market.multi_timeframe(cfg.symbol, cfg.timeframes, cfg.context_output_size)
             if not frames:
                 raise RuntimeError("No XAU/USD timeframes available")
 
-            # The strategy lab receives a deeper history only when research is due,
-            # keeping the thousands-of-strategies search separate from live analysis.
             if cycle == 0 or cycle % cfg.research_every_cycles == 0:
                 research_df = market.candles(cfg.symbol, cfg.research_interval, cfg.output_size)
                 frames[cfg.research_interval] = research_df
                 top = lab.run(research_df)
                 log.info(
-                    "Strategy lab evaluated %s variants; %s entered the robust catalog",
+                    "Strategy lab universe=%s evaluated=%s robust_catalog=%s top=%s walk_forward_folds=%s",
+                    lab.last_universe_size,
                     lab.last_evaluated,
                     len(lab.catalog),
+                    len(top),
+                    lab.walk_forward_folds,
                 )
 
-            # Refresh slower macro context every five cycles. Missing feeds are safe:
-            # the macro employees return HOLD instead of crashing the company.
             if cycle == 0 or cycle % 5 == 0:
                 dxy = market.safe_candles(cfg.dxy_symbol, cfg.macro_interval, cfg.context_output_size)
                 yields = market.safe_candles(cfg.yield_symbol, cfg.macro_interval, cfg.context_output_size)
