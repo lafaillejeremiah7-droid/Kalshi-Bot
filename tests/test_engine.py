@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 
+from xau_company.context import MultiTimeframeAgent, NewsRiskAgent
 from xau_company.models import AgentVote, Direction, TradeSignal
 from xau_company.research import Candidate, CandidateScore, StrategyResearchAgent
 from xau_company.selector import StrategySelectorAgent
@@ -19,11 +20,11 @@ def sample_df(n=600):
     })
 
 
-def trending_df(n=400):
-    close = np.linspace(2000, 2200, n)
-    open_ = close - 0.4
-    high = close + 1.0
-    low = open_ - 1.0
+def trending_df(n=400, upward=True):
+    close = np.linspace(2000, 2200, n) if upward else np.linspace(2200, 2000, n)
+    open_ = close - 0.4 if upward else close + 0.4
+    high = np.maximum(open_, close) + 1.0
+    low = np.minimum(open_, close) - 1.0
     return pd.DataFrame({
         "datetime": pd.date_range("2026-01-01", periods=n, freq="5min", tz="UTC"),
         "open": open_, "high": high, "low": low, "close": close,
@@ -63,6 +64,41 @@ def test_selector_chooses_researched_strategy_matching_market_and_analysts():
     assert pick.direction == Direction.BUY
     assert pick.score.candidate == candidate
     assert pick.analyst_agreement == 2
+
+
+def test_multi_timeframe_agent_creates_independent_horizon_votes():
+    agent = MultiTimeframeAgent()
+    frames = {
+        "1min": trending_df(),
+        "5min": trending_df(),
+        "15min": trending_df(),
+        "1h": trending_df(),
+        "4h": trending_df(),
+    }
+    votes = agent.analyze(frames)
+    assert len(votes) == 5
+    assert all(v.direction == Direction.BUY for v in votes)
+    assert {v.metadata["timeframe"] for v in votes} == {"1min", "5min", "15min", "1h", "4h"}
+
+
+def test_selector_weights_higher_timeframes_more_than_1m_noise():
+    selector = StrategySelectorAgent(min_probability=0.0, min_agreement=1)
+    votes = [
+        AgentVote("1m Execution Desk", Direction.SELL, 0.90, "noise", {"timeframe": "1min"}),
+        AgentVote("1h Trend Desk", Direction.BUY, 0.75, "trend", {"timeframe": "1h"}),
+        AgentVote("4h Macro Trend Desk", Direction.BUY, 0.72, "macro trend", {"timeframe": "4h"}),
+    ]
+    alignment = selector._timeframe_alignment(Direction.BUY, votes)
+    assert alignment > 0.5
+
+
+def test_news_risk_vetoes_inside_blackout_window():
+    from datetime import datetime, timezone
+
+    event = "2026-08-30T15:00:00Z"
+    agent = NewsRiskAgent.from_csv(event, block_minutes=20)
+    vote = agent.vote(datetime(2026, 8, 30, 15, 10, tzinfo=timezone.utc))
+    assert vote.metadata["veto"] is True
 
 
 def test_telegram_format_contains_trade_and_strategy_fields():
