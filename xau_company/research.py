@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 
 from .indicators import donchian, ema, roc, rsi, rolling_zscore
+from .models import Direction
 
 
 @dataclass(frozen=True)
@@ -33,6 +34,7 @@ class StrategyResearchAgent:
         self.spread_bps = spread_bps
         self.family_quality: dict[str, float] = {}
         self.top: list[CandidateScore] = []
+        self.catalog: list[CandidateScore] = []
         self.last_evaluated = 0
 
     def candidates(self) -> Iterable[Candidate]:
@@ -126,6 +128,18 @@ class StrategyResearchAgent:
             out[(m < -threshold) & (close < trend)] = -1
         return out
 
+    def current_direction(self, df: pd.DataFrame, candidate: Candidate) -> Direction:
+        """Return the candidate's live direction on the newest completed candle."""
+        signal = self._signal(df, candidate)
+        if signal.empty:
+            return Direction.HOLD
+        last = int(signal.iloc[-1])
+        if last > 0:
+            return Direction.BUY
+        if last < 0:
+            return Direction.SELL
+        return Direction.HOLD
+
     def _evaluate(self, df: pd.DataFrame, c: Candidate) -> CandidateScore | None:
         sig = self._signal(df, c)
         horizon = 3
@@ -158,9 +172,13 @@ class StrategyResearchAgent:
             if score is not None:
                 scores.append(score)
         scores.sort(key=lambda x: x.score, reverse=True)
-        self.top = scores[:25]
+        # Keep a deeper strategy library for live market matching. The top 25 remain
+        # available for reporting while the selector can choose from up to 300 robust
+        # candidates when the market regime changes.
+        self.catalog = scores[:300]
+        self.top = self.catalog[:25]
         buckets: dict[str, list[float]] = {}
-        for s in scores[:300]:
+        for s in self.catalog:
             buckets.setdefault(s.candidate.family, []).append(s.score)
         self.family_quality = {
             family: float(np.clip(np.mean(vals[:20]), 0.35, 0.85))
