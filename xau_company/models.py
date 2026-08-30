@@ -31,6 +31,8 @@ class TradeSignal:
     regime: str
     reasons: list[str]
     votes: list[AgentVote]
+    selected_strategy: str = ""
+    strategy_stats: dict[str, Any] = field(default_factory=dict)
 
     @property
     def risk_reward(self) -> float:
