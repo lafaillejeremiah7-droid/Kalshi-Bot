@@ -53,7 +53,6 @@ class BossAgent:
     @staticmethod
     def _normalize_frames(frames: dict[str, pd.DataFrame] | pd.DataFrame) -> dict[str, pd.DataFrame]:
         if isinstance(frames, pd.DataFrame):
-            # Backward-compatible path for tests/one-frame use.
             return {"5min": frames, "15min": frames, "1h": frames, "4h": frames}
         return frames
 
@@ -79,21 +78,14 @@ class BossAgent:
             return None
 
         regime = self.regime_agent.classify(core)
-
-        # Existing specialist desks diagnose the core timeframe.
         votes: list[AgentVote] = [desk.vote(core, regime, self.lab) for desk in self.desks]
-        # Independent timeframe employees diagnose different horizons.
         votes.extend(self.multi_timeframe.analyze(frame_map))
-        # Macro context is evidence rather than a hard trading rule.
         votes.extend(self.macro_context.analyze(dxy, yield_df))
-        # High-impact event blackout has hard veto authority.
         votes.append(self.news_risk.vote())
 
         if any(v.metadata.get("veto") for v in votes):
             return None
 
-        # The researched strategy is evaluated on the 15m/core frame; analysts do
-        # not directly create the trade, they determine whether that strategy fits now.
         pick = self.selector.select(core, regime, votes, self.lab)
         if pick is None:
             return None
@@ -112,9 +104,12 @@ class BossAgent:
             sl, tp = entry + risk, entry - risk * rr
 
         candidate = pick.score
+        wf_hit = candidate.walk_forward_hit_rate if candidate.walk_forward_hit_rate > 0 else candidate.valid_hit_rate
         reasons = [
             f"Strategy Selector: {pick.label}",
-            f"Research validation hit rate: {candidate.valid_hit_rate:.1%} across {candidate.trades} signals",
+            f"Walk-forward OOS hit rate: {wf_hit:.1%} over {candidate.folds} folds; stability {pick.walk_forward_stability:.0%}",
+            f"Current {regime} history: {pick.regime_history:.1%} over {pick.regime_samples} OOS signals",
+            f"Profit factor: {candidate.profit_factor:.2f}; OOS expectancy: {candidate.expectancy:.4%}",
             f"Current regime fit: {pick.regime_fit:.0%}",
             f"Multi-timeframe alignment: {pick.timeframe_alignment:.0%}",
             f"USD/yield macro alignment: {pick.macro_alignment:.0%}",
@@ -139,9 +134,16 @@ class BossAgent:
                 "params": candidate.candidate.params,
                 "train_hit_rate": candidate.train_hit_rate,
                 "valid_hit_rate": candidate.valid_hit_rate,
+                "walk_forward_hit_rate": candidate.walk_forward_hit_rate,
+                "walk_forward_std": candidate.walk_forward_std,
+                "folds": candidate.folds,
+                "expectancy": candidate.expectancy,
+                "profit_factor": candidate.profit_factor,
                 "trades": candidate.trades,
                 "research_score": candidate.score,
                 "regime_fit": pick.regime_fit,
+                "regime_history": pick.regime_history,
+                "regime_samples": pick.regime_samples,
                 "timeframe_alignment": pick.timeframe_alignment,
                 "macro_alignment": pick.macro_alignment,
             },
