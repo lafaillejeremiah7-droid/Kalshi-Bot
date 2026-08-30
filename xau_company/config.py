@@ -20,8 +20,10 @@ class Settings:
     telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
     telegram_chat_id: str = os.getenv("TELEGRAM_CHAT_ID", "")
     symbol: str = os.getenv("SYMBOL", "XAU/USD")
-    interval: str = os.getenv("INTERVAL", "5min")
+    research_interval: str = os.getenv("RESEARCH_INTERVAL", "15min")
+    timeframe_csv: str = os.getenv("TIMEFRAMES", "1min,5min,15min,1h,4h")
     output_size: int = int(os.getenv("OUTPUT_SIZE", "3000"))
+    context_output_size: int = int(os.getenv("CONTEXT_OUTPUT_SIZE", "500"))
     poll_seconds: int = int(os.getenv("POLL_SECONDS", "60"))
     min_confidence: float = float(os.getenv("MIN_CONFIDENCE", "0.72"))
     min_consensus: int = int(os.getenv("MIN_CONSENSUS", "3"))
@@ -29,6 +31,15 @@ class Settings:
     research_every_cycles: int = int(os.getenv("RESEARCH_EVERY_CYCLES", "60"))
     spread_bps: float = float(os.getenv("SPREAD_BPS", "1.5"))
     paper_mode: bool = _bool("PAPER_MODE", True)
+    dxy_symbol: str = os.getenv("DXY_SYMBOL", "DXY")
+    yield_symbol: str = os.getenv("YIELD_SYMBOL", "US10Y")
+    macro_interval: str = os.getenv("MACRO_INTERVAL", "1h")
+    high_impact_events_utc: str = os.getenv("HIGH_IMPACT_EVENTS_UTC", "")
+    news_block_minutes: int = int(os.getenv("NEWS_BLOCK_MINUTES", "20"))
+
+    @property
+    def timeframes(self) -> tuple[str, ...]:
+        return tuple(x.strip() for x in self.timeframe_csv.split(",") if x.strip())
 
     def validate(self) -> None:
         if not self.twelve_data_api_key:
@@ -37,3 +48,9 @@ class Settings:
             raise ValueError("MIN_CONFIDENCE must be between 0.50 and 0.99")
         if self.output_size < 300:
             raise ValueError("OUTPUT_SIZE must be at least 300")
+        allowed = {"1min", "5min", "15min", "30min", "45min", "1h", "2h", "4h", "8h", "1day"}
+        invalid = set(self.timeframes) - allowed
+        if invalid:
+            raise ValueError(f"Unsupported TIMEFRAMES: {sorted(invalid)}")
+        if self.research_interval not in allowed:
+            raise ValueError("Unsupported RESEARCH_INTERVAL")
