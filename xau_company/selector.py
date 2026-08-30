@@ -19,6 +19,9 @@ class StrategyPick:
     regime_fit: float
     timeframe_alignment: float = 0.5
     macro_alignment: float = 0.5
+    regime_history: float = 0.5
+    regime_samples: int = 0
+    walk_forward_stability: float = 0.5
 
     @property
     def label(self) -> str:
@@ -32,10 +35,30 @@ class StrategySelectorAgent:
     name = "Strategy Selection Desk"
 
     REGIME_FIT = {
-        "trend_up": {"trend": 1.00, "momentum": 0.95, "breakout": 0.88, "mean_reversion": 0.45},
-        "trend_down": {"trend": 1.00, "momentum": 0.95, "breakout": 0.88, "mean_reversion": 0.45},
-        "range": {"mean_reversion": 1.00, "trend": 0.52, "momentum": 0.55, "breakout": 0.48},
-        "volatile": {"breakout": 0.92, "momentum": 0.86, "trend": 0.70, "mean_reversion": 0.38},
+        "trend_up": {
+            "trend": 1.00, "triple_trend": 1.00, "rsi_trend": 0.96, "pullback": 0.94,
+            "momentum": 0.93, "breakout": 0.86, "bollinger_breakout": 0.83,
+            "volatility_breakout": 0.78, "mean_reversion": 0.43, "bollinger_reversion": 0.40,
+            "range_fade": 0.35,
+        },
+        "trend_down": {
+            "trend": 1.00, "triple_trend": 1.00, "rsi_trend": 0.96, "pullback": 0.94,
+            "momentum": 0.93, "breakout": 0.86, "bollinger_breakout": 0.83,
+            "volatility_breakout": 0.78, "mean_reversion": 0.43, "bollinger_reversion": 0.40,
+            "range_fade": 0.35,
+        },
+        "range": {
+            "mean_reversion": 1.00, "bollinger_reversion": 0.98, "range_fade": 0.96,
+            "pullback": 0.58, "trend": 0.50, "triple_trend": 0.48, "rsi_trend": 0.50,
+            "momentum": 0.50, "breakout": 0.45, "bollinger_breakout": 0.43,
+            "volatility_breakout": 0.42,
+        },
+        "volatile": {
+            "volatility_breakout": 1.00, "breakout": 0.94, "bollinger_breakout": 0.92,
+            "momentum": 0.84, "trend": 0.70, "triple_trend": 0.72, "rsi_trend": 0.66,
+            "pullback": 0.60, "mean_reversion": 0.35, "bollinger_reversion": 0.34,
+            "range_fade": 0.30,
+        },
     }
 
     TF_WEIGHTS = {"1min": 0.60, "5min": 0.80, "15min": 1.00, "1h": 1.30, "4h": 1.55}
@@ -44,8 +67,14 @@ class StrategySelectorAgent:
         self.min_probability = min_probability
         self.min_agreement = min_agreement
 
-    def _regime_fit(self, family: str, regime: str) -> float:
-        return self.REGIME_FIT.get(regime, {}).get(family, 0.60)
+    def _family_regime_fit(self, family: str, regime: str) -> float:
+        return self.REGIME_FIT.get(regime, {}).get(family, 0.55)
+
+    def _historical_regime_fit(self, result: CandidateScore, regime: str) -> tuple[float, int]:
+        raw = result.regime_scores.get(regime, 0.50)
+        samples = result.regime_trades.get(regime, 0)
+        trust = min(1.0, samples / 40.0)
+        return float(0.5 + (raw - 0.5) * trust), samples
 
     def _analyst_support(self, direction: Direction, votes: list[AgentVote]) -> tuple[float, float, int, int]:
         support = [v for v in votes if v.direction == direction]
@@ -100,24 +129,30 @@ class StrategySelectorAgent:
             if agreeing < self.min_agreement:
                 continue
 
-            regime_fit = self._regime_fit(result.candidate.family, regime)
+            family_fit = self._family_regime_fit(result.candidate.family, regime)
+            regime_history, regime_samples = self._historical_regime_fit(result, regime)
+            regime_fit = family_fit * 0.35 + regime_history * 0.65
             timeframe_alignment = self._timeframe_alignment(direction, votes)
             macro_alignment = self._macro_alignment(direction, votes)
 
-            # Historical robustness remains dominant, but activation is conditional
-            # on current regime, independent analysts, higher timeframes and macro context.
-            probability = (
-                result.valid_hit_rate * 0.31
-                + result.score * 0.20
-                + regime_fit * 0.14
-                + support * 0.13
-                + timeframe_alignment * 0.15
-                + macro_alignment * 0.07
-                - opposition * 0.12
-            )
-            sample_factor = float(np.clip(np.log1p(result.trades) / np.log(301), 0.55, 1.0))
+            wf_hit = result.walk_forward_hit_rate if result.walk_forward_hit_rate > 0 else result.valid_hit_rate
             stability_gap = abs(result.train_hit_rate - result.valid_hit_rate)
-            probability = probability * sample_factor - stability_gap * 0.18
+            stability = float(np.clip(1.0 - stability_gap - result.walk_forward_std * 1.5, 0.0, 1.0))
+            pf_score = result.profit_factor / (1.0 + result.profit_factor)
+
+            probability = (
+                wf_hit * 0.24
+                + result.score * 0.14
+                + regime_fit * 0.20
+                + support * 0.10
+                + timeframe_alignment * 0.14
+                + macro_alignment * 0.05
+                + pf_score * 0.05
+                + stability * 0.08
+                - opposition * 0.08
+            )
+            sample_trust = float(np.clip(np.log1p(result.trades) / np.log(501), 0.0, 1.0))
+            probability -= (1.0 - sample_trust) * 0.08
             probability = float(np.clip(probability, 0.0, 0.97))
 
             pick = StrategyPick(
@@ -129,6 +164,9 @@ class StrategySelectorAgent:
                 regime_fit=regime_fit,
                 timeframe_alignment=timeframe_alignment,
                 macro_alignment=macro_alignment,
+                regime_history=regime_history,
+                regime_samples=regime_samples,
+                walk_forward_stability=stability,
             )
             if best is None or pick.probability_score > best.probability_score:
                 best = pick
