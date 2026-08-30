@@ -15,17 +15,22 @@ class TelegramNotifier:
         why = "\n".join(f"• {r}" for r in s.reasons)
         strategy = s.selected_strategy or "not reported"
         stats = s.strategy_stats or {}
-        valid = stats.get("valid_hit_rate")
+        valid = stats.get("walk_forward_hit_rate", stats.get("valid_hit_rate"))
         trades = stats.get("trades")
+        folds = stats.get("folds")
+        pf = stats.get("profit_factor")
         validation_line = ""
         if isinstance(valid, (int, float)) and trades is not None:
-            validation_line = f"Validation: {valid:.1%} over {trades} historical signals\n"
+            fold_text = f" / {folds} walk-forward folds" if folds else ""
+            validation_line = f"OOS validation: {valid:.1%} over {trades} signals{fold_text}\n"
+        pf_line = f"Profit factor: {pf:.2f}\n" if isinstance(pf, (int, float)) else ""
         return (
             f"XAU COMPANY SIGNAL\n"
             f"Symbol: {s.symbol}\n"
             f"Action: {s.direction.value}\n"
             f"Strategy: {strategy}\n"
             f"{validation_line}"
+            f"{pf_line}"
             f"Entry: {s.entry:.2f}\n"
             f"TP: {s.take_profit:.2f}\n"
             f"SL: {s.stop_loss:.2f}\n"
