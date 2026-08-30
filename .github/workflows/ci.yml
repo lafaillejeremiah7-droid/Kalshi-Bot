@@ -16,7 +16,7 @@ jobs:
       - name: Run tests
         run: |
           set +e
-          pytest -q 2>&1 | tee test-output.txt
+          python -m pytest -q 2>&1 | tee test-output.txt
           status=${PIPESTATUS[0]}
           exit $status
       - name: Upload test diagnostics
