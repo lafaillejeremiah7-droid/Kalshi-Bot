@@ -27,7 +27,10 @@ class Settings:
     poll_seconds: int = int(os.getenv("POLL_SECONDS", "60"))
     min_confidence: float = float(os.getenv("MIN_CONFIDENCE", "0.72"))
     min_consensus: int = int(os.getenv("MIN_CONSENSUS", "3"))
-    max_candidates: int = int(os.getenv("MAX_CANDIDATES", "3000"))
+    max_candidates: int = int(os.getenv("MAX_CANDIDATES", "20000"))
+    research_catalog_size: int = int(os.getenv("RESEARCH_CATALOG_SIZE", "600"))
+    walk_forward_folds: int = int(os.getenv("WALK_FORWARD_FOLDS", "4"))
+    min_walk_forward_folds: int = int(os.getenv("MIN_WALK_FORWARD_FOLDS", "2"))
     research_every_cycles: int = int(os.getenv("RESEARCH_EVERY_CYCLES", "60"))
     spread_bps: float = float(os.getenv("SPREAD_BPS", "1.5"))
     paper_mode: bool = _bool("PAPER_MODE", True)
@@ -48,6 +51,12 @@ class Settings:
             raise ValueError("MIN_CONFIDENCE must be between 0.50 and 0.99")
         if self.output_size < 300:
             raise ValueError("OUTPUT_SIZE must be at least 300")
+        if self.max_candidates < 1000:
+            raise ValueError("MAX_CANDIDATES must be at least 1000")
+        if self.research_catalog_size < 50:
+            raise ValueError("RESEARCH_CATALOG_SIZE must be at least 50")
+        if self.walk_forward_folds < 2:
+            raise ValueError("WALK_FORWARD_FOLDS must be at least 2")
         allowed = {"1min", "5min", "15min", "30min", "45min", "1h", "2h", "4h", "8h", "1day"}
         invalid = set(self.timeframes) - allowed
         if invalid:
