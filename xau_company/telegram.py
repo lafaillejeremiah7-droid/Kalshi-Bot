@@ -25,6 +25,8 @@ class TelegramNotifier:
         raw_conf = stats.get("selection_confidence_raw")
         calibration_samples = stats.get("calibration_samples")
         brier = stats.get("calibration_brier_score")
+        trades_today_before = stats.get("trades_today_before_signal")
+        daily_cap = stats.get("daily_trade_cap")
 
         validation_line = ""
         if isinstance(valid, (int, float)) and trades is not None:
@@ -35,6 +37,10 @@ class TelegramNotifier:
         if isinstance(avg_r, (int, float)) and isinstance(max_dd, (int, float)):
             streak_text = f" / worst streak {streak}" if isinstance(streak, int) else ""
             lifecycle_line = f"Avg R: {avg_r:+.2f} / Max DD: {max_dd:.2f}R{streak_text}\n"
+
+        daily_line = ""
+        if isinstance(trades_today_before, int) and isinstance(daily_cap, int):
+            daily_line = f"Daily trade slot: {trades_today_before + 1}/{daily_cap}\n"
 
         if isinstance(raw_conf, (int, float)):
             sample_text = f" from {calibration_samples} resolved outcomes" if isinstance(calibration_samples, int) else ""
@@ -52,6 +58,7 @@ class TelegramNotifier:
             f"Symbol: {s.symbol}\n"
             f"Action: {s.direction.value}\n"
             f"Strategy: {strategy}\n"
+            f"{daily_line}"
             f"{validation_line}"
             f"{pf_line}"
             f"{lifecycle_line}"
