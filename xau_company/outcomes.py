@@ -23,11 +23,10 @@ class CalibrationResult:
 class OutcomeCalibrationAgent:
     """Persist emitted signals, resolve TP/SL outcomes, and calibrate confidence.
 
-    Calibration is deliberately conservative. A confidence bucket starts with the
-    selector's raw score as a Bayesian prior and only moves materially after real
-    forward outcomes accumulate. Strategy-family + regime evidence is used when
-    enough contextual samples exist; otherwise the broader confidence bucket is
-    used.
+    Signal identity uses the originating execution-candle time for restart-safe
+    deduplication, while observed_at is the actual emission time. This prevents
+    lower-timeframe price action that occurred before emission from being counted
+    as a forward outcome.
     """
 
     name = "Outcome & Calibration Desk"
@@ -100,10 +99,10 @@ class OutcomeCalibrationAgent:
         return strategy.split("(", 1)[0].strip() if strategy else ""
 
     @staticmethod
-    def _signal_key(signal: TradeSignal, observed_at: str) -> str:
+    def _signal_key(signal: TradeSignal, setup_at: str) -> str:
         raw = "|".join(
             [
-                observed_at,
+                setup_at,
                 signal.symbol,
                 signal.direction.value,
                 signal.selected_strategy,
@@ -114,9 +113,9 @@ class OutcomeCalibrationAgent:
         )
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
-    def exists(self, signal: TradeSignal, observed_at: datetime | pd.Timestamp | str) -> bool:
-        observed = self.utc_iso(observed_at)
-        key = self._signal_key(signal, observed)
+    def exists(self, signal: TradeSignal, setup_at: datetime | pd.Timestamp | str) -> bool:
+        setup = self.utc_iso(setup_at)
+        key = self._signal_key(signal, setup)
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT 1 FROM signal_outcomes WHERE signal_key = ? LIMIT 1", (key,)
@@ -128,11 +127,13 @@ class OutcomeCalibrationAgent:
         signal: TradeSignal,
         observed_at: datetime | pd.Timestamp | str,
         selection_confidence: float | None = None,
+        setup_at: datetime | pd.Timestamp | str | None = None,
     ) -> bool:
         observed = self.utc_iso(observed_at)
+        setup = self.utc_iso(setup_at if setup_at is not None else observed_at)
         raw_conf = float(signal.confidence if selection_confidence is None else selection_confidence)
         calibrated = float(signal.confidence)
-        key = self._signal_key(signal, observed)
+        key = self._signal_key(signal, setup)
         with self._connect() as conn:
             cursor = conn.execute(
                 """
@@ -160,7 +161,7 @@ class OutcomeCalibrationAgent:
             return cursor.rowcount > 0
 
     def resolve_open(self, df: pd.DataFrame) -> dict[str, int]:
-        """Resolve open signals against later completed OHLC candles.
+        """Resolve open signals against candles strictly later than emission.
 
         A candle that touches both stop and target is recorded as a loss because
         intrabar sequencing is unknown. Signals that remain unresolved beyond
