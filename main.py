@@ -17,15 +17,15 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger("xau-company")
 
 
-def _resolution_frame(frames: dict[str, pd.DataFrame]) -> pd.DataFrame | None:
-    for timeframe in ("1min", "5min", "15min", "1h", "4h"):
+def _pick_frame(frames: dict[str, pd.DataFrame], preferences: tuple[str, ...]) -> pd.DataFrame | None:
+    for timeframe in preferences:
         frame = frames.get(timeframe)
         if frame is not None and not frame.empty:
             return frame
     return next((df for df in frames.values() if df is not None and not df.empty), None)
 
 
-def _observed_at(frame: pd.DataFrame | None):
+def _frame_timestamp(frame: pd.DataFrame | None):
     if frame is not None and not frame.empty and "datetime" in frame.columns:
         value = frame["datetime"].iloc[-1]
         if pd.notna(value):
@@ -73,7 +73,10 @@ def run() -> None:
             if not frames:
                 raise RuntimeError("No XAU/USD timeframes available")
 
-            resolution_df = _resolution_frame(frames)
+            resolution_df = _pick_frame(frames, ("1min", "5min", "15min", "1h", "4h"))
+            execution_df = _pick_frame(frames, ("5min", "1min", "15min"))
+            signal_observed_at = _frame_timestamp(execution_df)
+
             if resolution_df is not None:
                 resolved = outcomes.resolve_open(resolution_df)
                 if sum(resolved.values()):
@@ -135,15 +138,16 @@ def run() -> None:
                         calibration.samples,
                     )
                 else:
-                    observed_at = _observed_at(resolution_df)
+                    observed_key = OutcomeCalibrationAgent._utc_iso(signal_observed_at)
                     fingerprint = (
+                        observed_key,
                         signal.direction.value,
                         signal.selected_strategy,
                         round(signal.entry, 1),
                         round(signal.stop_loss, 1),
                         round(signal.take_profit, 1),
                     )
-                    already_recorded = outcomes.exists(signal, observed_at)
+                    already_recorded = outcomes.exists(signal, signal_observed_at)
                     if fingerprint != last_fingerprint and not already_recorded:
                         log.info(
                             "Signal %s using %s raw_confidence %.1f%% calibrated_confidence %.1f%% samples=%s",
@@ -157,7 +161,7 @@ def run() -> None:
                             log.info("PAPER_MODE: %s", telegram.format_signal(signal).replace("\n", " | "))
                         else:
                             telegram.send(signal)
-                        outcomes.record(signal, observed_at, selection_confidence=raw_confidence)
+                        outcomes.record(signal, signal_observed_at, selection_confidence=raw_confidence)
                         last_fingerprint = fingerprint
                     elif already_recorded:
                         log.info("Duplicate signal suppressed by persistent outcome ledger")
