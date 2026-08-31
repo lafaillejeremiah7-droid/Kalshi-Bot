@@ -23,6 +23,9 @@ def run() -> None:
         walk_forward_folds=cfg.walk_forward_folds,
         catalog_size=cfg.research_catalog_size,
         min_walk_forward_folds=cfg.min_walk_forward_folds,
+        slippage_bps=cfg.slippage_bps,
+        backtest_stop_atr=cfg.backtest_stop_atr,
+        backtest_reward_risk=cfg.backtest_reward_risk,
     )
     boss = BossAgent(
         lab,
@@ -49,12 +52,14 @@ def run() -> None:
                 frames[cfg.research_interval] = research_df
                 top = lab.run(research_df)
                 log.info(
-                    "Strategy lab universe=%s evaluated=%s robust_catalog=%s top=%s walk_forward_folds=%s",
+                    "Strategy lab universe=%s evaluated=%s robust_catalog=%s top=%s walk_forward_folds=%s spread_bps=%.2f slippage_bps=%.2f",
                     lab.last_universe_size,
                     lab.last_evaluated,
                     len(lab.catalog),
                     len(top),
                     lab.walk_forward_folds,
+                    cfg.spread_bps,
+                    cfg.slippage_bps,
                 )
 
             if cycle == 0 or cycle % 5 == 0:
