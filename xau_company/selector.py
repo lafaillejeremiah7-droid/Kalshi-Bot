@@ -31,7 +31,7 @@ class StrategyPick:
 
 
 class StrategySelectorAgent:
-    """Chooses the researched strategy most compatible with the market right now."""
+    """Choose the researched strategy most compatible with the market right now."""
 
     name = "Strategy Selection Desk"
 
@@ -63,10 +63,11 @@ class StrategySelectorAgent:
     }
 
     TF_WEIGHTS = {"1min": 0.60, "5min": 0.80, "15min": 1.00, "1h": 1.30, "4h": 1.55}
+    MACRO_AGENTS = {"USD Strength Desk", "Treasury Yield Desk"}
 
     def __init__(self, min_probability: float = 0.66, min_agreement: int = 2) -> None:
         self.min_probability = min_probability
-        self.min_agreement = min_agreement
+        self.min_agreement = max(1, int(min_agreement))
 
     def _family_regime_fit(self, family: str, regime: str) -> float:
         return self.REGIME_FIT.get(regime, {}).get(family, 0.55)
@@ -77,10 +78,31 @@ class StrategySelectorAgent:
         trust = min(1.0, samples / 40.0)
         return float(0.5 + (raw - 0.5) * trust), samples
 
+    def _directional_analyst_votes(self, votes: list[AgentVote]) -> list[AgentVote]:
+        """Return specialist votes only.
+
+        Timeframe and macro votes have dedicated score components, so including
+        them in generic analyst agreement would double-count the same evidence.
+        Risk/session/news HOLD votes are guards, not directional analysts.
+        """
+        filtered: list[AgentVote] = []
+        for vote in votes:
+            if vote.metadata.get("timeframe") in self.TF_WEIGHTS:
+                continue
+            if vote.agent in self.MACRO_AGENTS:
+                continue
+            if vote.metadata.get("veto") is not None:
+                continue
+            if vote.agent == "Session Desk":
+                continue
+            filtered.append(vote)
+        return filtered
+
     def _analyst_support(self, direction: Direction, votes: list[AgentVote]) -> tuple[float, float, int, int]:
-        support = [v for v in votes if v.direction == direction]
+        specialist_votes = self._directional_analyst_votes(votes)
+        support = [v for v in specialist_votes if v.direction == direction]
         opposite_direction = Direction.SELL if direction == Direction.BUY else Direction.BUY
-        opposition = [v for v in votes if v.direction == opposite_direction]
+        opposition = [v for v in specialist_votes if v.direction == opposite_direction]
         support_strength = sum(v.confidence for v in support) / max(1, len(support))
         opposition_strength = sum(v.confidence for v in opposition) / max(1, len(opposition))
         return support_strength, opposition_strength, len(support), len(opposition)
@@ -101,7 +123,7 @@ class StrategySelectorAgent:
         return float(np.clip(0.5 + signed / max(total, 1e-9) * 0.5, 0.0, 1.0))
 
     def _macro_alignment(self, direction: Direction, votes: list[AgentVote]) -> float:
-        macro = [v for v in votes if v.agent in {"USD Strength Desk", "Treasury Yield Desk"}]
+        macro = [v for v in votes if v.agent in self.MACRO_AGENTS]
         if not macro:
             return 0.50
         signed = 0.0
@@ -161,7 +183,10 @@ class StrategySelectorAgent:
                 + lifecycle_quality * 0.11
                 - opposition * 0.08
             )
-            sample_trust = float(np.clip(np.log1p(result.trades) / np.log(401), 0.0, 1.0))
+            # Trust only the true OOS executed-trade sample, not all historical
+            # simulated trades, when deciding how much confidence to place in it.
+            sample_n = max(0, int(result.oos_trades))
+            sample_trust = float(np.clip(np.log1p(sample_n) / np.log(401), 0.0, 1.0))
             probability -= (1.0 - sample_trust) * 0.08
             probability = float(np.clip(probability, 0.0, 0.97))
 
