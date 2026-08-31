@@ -138,7 +138,7 @@ def run() -> None:
                         calibration.samples,
                     )
                 else:
-                    observed_key = OutcomeCalibrationAgent._utc_iso(signal_observed_at)
+                    observed_key = OutcomeCalibrationAgent.utc_iso(signal_observed_at)
                     fingerprint = (
                         observed_key,
                         signal.direction.value,
