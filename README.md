@@ -1,29 +1,54 @@
 # XAU/USD Multi-Agent Signal Company
 
-A research-first, multi-agent XAU/USD signal engine. It evaluates thousands of parameterized strategy variants, detects the current market regime, asks specialized strategy desks for votes, lets risk/volatility desks veto bad conditions, and only emits a Telegram BUY/SELL signal when the boss agent sees enough agreement.
+A research-first XAU/USD signal engine. The company researches a large strategy universe, validates strategies with conservative trade-lifecycle simulation and expanding walk-forward folds, diagnoses the current market across multiple timeframes and macro context, then lets a boss/risk layer authorize Telegram BUY/SELL signals with Entry, TP and SL.
 
-## The company (10 bots)
+## Company structure
 
-1. **Market Data Bot** — pulls XAU/USD OHLC candles from Twelve Data.
-2. **Strategy Research Bot** — tests up to `MAX_CANDIDATES` strategy variants and ranks out-of-sample stability.
-3. **Regime Bot** — classifies trend-up, trend-down, range, or volatile conditions.
-4. **Trend Bot** — EMA alignment/trend-following vote.
-5. **Breakout Bot** — Donchian breakout + momentum confirmation.
-6. **Mean-Reversion Bot** — RSI + z-score exhaustion vote.
-7. **Momentum Bot** — multi-horizon rate-of-change vote.
-8. **Price/Structure Bot** — candle and higher-high/lower-low confirmation.
-9. **Risk Guards** — volatility/session filters and veto logic.
-10. **Boss Bot** — combines votes, applies consensus/confidence gates, computes ATR-based SL/TP, and authorizes Telegram delivery.
+1. **Market Data Bot** — pulls XAU/USD OHLC candles and optional macro series.
+2. **Strategy Research Lab** — samples up to `MAX_CANDIDATES` from a 27k+ universe spanning 11 strategy families.
+3. **Backtest Auditor** — simulates next-bar entries, spread, slippage, ATR stops/targets, non-overlapping trades and conservative same-bar TP/SL ordering.
+4. **Regime Bot** — classifies trend-up, trend-down, range or volatile conditions.
+5. **Multi-Timeframe Team** — independently analyzes 1m, 5m, 15m, 1h and 4h horizons, with higher timeframes weighted more heavily.
+6. **Trend / Momentum Team** — trend, triple-trend, RSI-trend, pullback and momentum evidence.
+7. **Breakout Team** — Donchian, Bollinger and volatility-breakout evidence.
+8. **Mean-Reversion Team** — RSI/z-score, Bollinger-reversion and range-fade evidence.
+9. **Price/Structure Team** — candle and higher-high/lower-low confirmation.
+10. **Macro Team** — USD and Treasury-yield context when those feeds are available.
+11. **Risk Team** — volatility/session guards plus high-impact-news vetoes.
+12. **Strategy Selector + Boss** — chooses the researched strategy best suited to the current market, computes the final risk geometry and authorizes Telegram delivery.
 
-## Important design rule
+## Research model
 
-The system does **not** select the strategy with the highest in-sample win rate. Searching thousands of variants can overfit history. The research bot uses a chronological train/validation split, penalizes train-vs-validation deterioration, trading friction, and tiny sample sizes, then feeds family-quality scores to the live desks.
+The system does **not** choose the strategy with the highest raw historical win rate. Searching thousands of variants can overfit history.
 
-This is a research framework, not a guarantee of profit. Run it in paper mode and validate it across enough unseen data before considering live use.
+Each candidate is evaluated using expanding walk-forward validation and a realistic lifecycle model:
 
-## Data
+- The signal must exist on a completed candle.
+- The simulated trade enters on the **next candle open**.
+- Spread and configurable slippage are charged on both sides of the trade.
+- Stop-loss and take-profit are based on ATR-known information from the signal candle.
+- If the same OHLC candle touches both TP and SL, the backtester assumes **SL happened first**.
+- A second trade cannot open while the first simulated trade is active.
+- Trades crossing a walk-forward fold boundary are excluded from that fold's validation.
 
-Twelve Data currently lists **Gold Spot / US Dollar (`XAU/USD`)** and supports intraday history. A request is capped at 5,000 data points, so the app caps `OUTPUT_SIZE` accordingly.
+Strategies are ranked using out-of-sample hit rate, fold stability, executed-trade sample size, profit factor, average R-multiple, net expectancy, maximum drawdown, losing-streak behavior and performance by market regime.
+
+The live selector then combines those historical metrics with current regime fit, 1m/5m/15m/1h/4h alignment, specialist analyst confirmation and optional USD/yield context.
+
+`Selection confidence` is a relative strategy-selection score, not a guaranteed or statistically calibrated probability of profit.
+
+## Main research settings
+
+```text
+MAX_CANDIDATES=20000
+RESEARCH_CATALOG_SIZE=600
+WALK_FORWARD_FOLDS=4
+MIN_WALK_FORWARD_FOLDS=2
+SPREAD_BPS=1.5
+SLIPPAGE_BPS=0.5
+BACKTEST_STOP_ATR=1.20
+BACKTEST_REWARD_RISK=1.70
+```
 
 ## Setup
 
@@ -40,7 +65,7 @@ Fill in:
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_CHAT_ID`
 
-Keep `PAPER_MODE=true` initially. In paper mode the signal is printed instead of sent to Telegram.
+Keep `PAPER_MODE=true` until the forward results justify changing it. In paper mode the company logs the signal instead of sending it.
 
 ## Run
 
@@ -48,25 +73,31 @@ Keep `PAPER_MODE=true` initially. In paper mode the signal is printed instead of
 python main.py
 ```
 
-## Telegram signal format
+## Telegram signal includes
 
 ```text
 XAU COMPANY SIGNAL
 Symbol: XAU/USD
 Action: BUY
+Strategy: <selected researched strategy>
+OOS validation: <walk-forward result>
+Profit factor: <PF>
+Avg R: <average R> / Max DD: <drawdown in R>
 Entry: 0000.00
 TP: 0000.00
 SL: 0000.00
-Confidence: 78.4%
+Selection confidence: 00.0%
 Regime: trend_up
-R:R: 1.80
+R:R: 0.00
 ```
 
-## Next production upgrades
+## Remaining production work
 
-- Walk-forward/embargoed cross-validation and probability-of-backtest-overfitting metrics.
-- Economic-calendar/news-event vetoes for CPI, NFP, FOMC and major geopolitical shocks.
-- DXY, real-yield, ETF-flow, positioning and cross-asset features.
-- Persistent results DB so strategy weights learn from real forward outcomes.
-- Multi-timeframe confirmation (1m/5m/15m/1h/4h).
-- Alert deduplication, health checks and deployment monitoring.
+- Persist every emitted signal and its realized outcome in a database.
+- Calibrate the selection score against real forward outcomes before calling it a probability.
+- Add stronger economic-calendar ingestion instead of manually configured event timestamps.
+- Add stale-candle/market-hours guards, API backoff and health monitoring.
+- Add embargo/multiple-testing controls such as stronger overfit penalties.
+- Deploy only after sustained paper/shadow validation.
+
+This is a research framework, not a guarantee of profit.
