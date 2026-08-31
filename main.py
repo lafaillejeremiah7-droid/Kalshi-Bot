@@ -51,9 +51,11 @@ def run() -> None:
     cfg = Settings()
     cfg.validate()
     market = TwelveDataClient(cfg.twelve_data_api_key)
+    # XAU/USD market-session hours are anchored to Chicago regardless of the
+    # user's preferred accounting timezone for the daily signal cap.
     quality = MarketDataQualityAgent(
         max_stale_multiplier=cfg.max_stale_multiplier,
-        timezone_name=cfg.trade_timezone,
+        timezone_name="America/Chicago",
     )
     lab = AdaptiveStrategyResearchAgent(
         max_candidates=cfg.max_candidates,
@@ -131,8 +133,8 @@ def run() -> None:
                 time.sleep(cfg.poll_seconds)
                 continue
 
-            execution_df = _pick_frame(frames, ("5min", "1min"))
-            signal_setup_at = _frame_timestamp(execution_df)
+            research_live_df = frames.get(cfg.research_interval)
+            signal_setup_at = _frame_timestamp(research_live_df)
 
             # Always fetch enough completed 1-minute history to cover the maximum
             # persisted forward-outcome window after a long process outage.
@@ -178,6 +180,8 @@ def run() -> None:
                 if not research_report.ok:
                     raise RuntimeError(f"Research data rejected: {research_report.reason}")
                 frames[cfg.research_interval] = research_df
+                research_live_df = research_df
+                signal_setup_at = _frame_timestamp(research_live_df)
                 top = lab.run(research_df)
                 last_research_success = cycle
                 log.info(
@@ -211,6 +215,32 @@ def run() -> None:
                     now,
                 )
 
+            # The research backtest acts on a signal immediately after a completed
+            # research candle. Refuse a Telegram authorization if runtime work has
+            # delayed us too far beyond that same candle close.
+            decision_now = pd.Timestamp(datetime.now(timezone.utc))
+            setup_start = pd.Timestamp(signal_setup_at)
+            if setup_start.tzinfo is None:
+                setup_start = setup_start.tz_localize("UTC")
+            else:
+                setup_start = setup_start.tz_convert("UTC")
+            setup_end = setup_start + quality.interval_delta(cfg.research_interval)
+            signal_delay = decision_now - setup_end
+            if signal_delay < pd.Timedelta(0):
+                log.info("Signal timing veto: research candle is not complete")
+                cycle += 1
+                time.sleep(cfg.poll_seconds)
+                continue
+            if signal_delay > pd.Timedelta(minutes=cfg.max_signal_delay_minutes):
+                log.info(
+                    "Signal timing veto: setup is %s old after research candle close (max %s min)",
+                    signal_delay,
+                    cfg.max_signal_delay_minutes,
+                )
+                cycle += 1
+                time.sleep(cfg.poll_seconds)
+                continue
+
             live_price = market.safe_price(cfg.symbol)
             if live_price is None:
                 log.info("Market-quality veto: no fresh executable reference price")
@@ -240,6 +270,8 @@ def run() -> None:
                         "calibration_samples": calibration.samples,
                         "calibration_wins": calibration.wins,
                         "calibration_brier_score": calibration.brier_score,
+                        "setup_candle_start": OutcomeCalibrationAgent.utc_iso(signal_setup_at),
+                        "signal_delay_seconds": max(0.0, signal_delay.total_seconds()),
                     }
                 )
                 signal.confidence = calibration.probability
@@ -304,9 +336,6 @@ def run() -> None:
                                 try:
                                     message_id = telegram.send(signal)
                                 except Exception:
-                                    # The external delivery result can be unknown on
-                                    # timeout/crash. Keep the reservation to prevent
-                                    # a duplicate send or daily-slot reuse.
                                     outcomes.mark_delivery_state(signal, signal_setup_at, "UNKNOWN")
                                     raise
                                 else:
