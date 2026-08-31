@@ -78,13 +78,16 @@ class StrategySelectorAgent:
         trust = min(1.0, samples / 40.0)
         return float(0.5 + (raw - 0.5) * trust), samples
 
-    def _directional_analyst_votes(self, votes: list[AgentVote]) -> list[AgentVote]:
-        """Return specialist votes only.
+    @staticmethod
+    def _oos_sample_size(result: CandidateScore) -> int:
+        # Every walk-forward OOS trade is assigned exactly one historical regime.
+        # Synthetic/legacy CandidateScore objects may not include regime buckets,
+        # so retain a conservative compatibility fallback for those only.
+        regime_total = sum(max(0, int(n)) for n in result.regime_trades.values())
+        return regime_total if regime_total > 0 else max(0, int(result.trades))
 
-        Timeframe and macro votes have dedicated score components, so including
-        them in generic analyst agreement would double-count the same evidence.
-        Risk/session/news HOLD votes are guards, not directional analysts.
-        """
+    def _directional_analyst_votes(self, votes: list[AgentVote]) -> list[AgentVote]:
+        """Return specialist directional votes without double-counting context."""
         filtered: list[AgentVote] = []
         for vote in votes:
             if vote.metadata.get("timeframe") in self.TF_WEIGHTS:
@@ -183,9 +186,7 @@ class StrategySelectorAgent:
                 + lifecycle_quality * 0.11
                 - opposition * 0.08
             )
-            # Trust only the true OOS executed-trade sample, not all historical
-            # simulated trades, when deciding how much confidence to place in it.
-            sample_n = max(0, int(result.oos_trades))
+            sample_n = self._oos_sample_size(result)
             sample_trust = float(np.clip(np.log1p(sample_n) / np.log(401), 0.0, 1.0))
             probability -= (1.0 - sample_trust) * 0.08
             probability = float(np.clip(probability, 0.0, 0.97))
