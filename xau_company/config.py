@@ -34,6 +34,12 @@ class Settings:
     walk_forward_folds: int = int(os.getenv("WALK_FORWARD_FOLDS", "4"))
     min_walk_forward_folds: int = int(os.getenv("MIN_WALK_FORWARD_FOLDS", "2"))
     research_every_cycles: int = int(os.getenv("RESEARCH_EVERY_CYCLES", "60"))
+    enable_strategy_evolution: bool = _bool("ENABLE_STRATEGY_EVOLUTION", True)
+    strategy_library_path: str = os.getenv(
+        "STRATEGY_LIBRARY_PATH", "data/discovered_strategies.json"
+    )
+    discoveries_per_cycle: int = int(os.getenv("DISCOVERIES_PER_CYCLE", "250"))
+    discovery_library_size: int = int(os.getenv("DISCOVERY_LIBRARY_SIZE", "5000"))
     spread_bps: float = float(os.getenv("SPREAD_BPS", "1.5"))
     slippage_bps: float = float(os.getenv("SLIPPAGE_BPS", "0.5"))
     backtest_stop_atr: float = float(os.getenv("BACKTEST_STOP_ATR", "1.20"))
@@ -68,6 +74,10 @@ class Settings:
             raise ValueError("RESEARCH_CATALOG_SIZE must be at least 50")
         if self.walk_forward_folds < 2:
             raise ValueError("WALK_FORWARD_FOLDS must be at least 2")
+        if self.discoveries_per_cycle < 0:
+            raise ValueError("DISCOVERIES_PER_CYCLE cannot be negative")
+        if self.discovery_library_size < 100:
+            raise ValueError("DISCOVERY_LIBRARY_SIZE must be at least 100")
         if self.spread_bps < 0 or self.slippage_bps < 0:
             raise ValueError("SPREAD_BPS and SLIPPAGE_BPS cannot be negative")
         if self.backtest_stop_atr <= 0:
