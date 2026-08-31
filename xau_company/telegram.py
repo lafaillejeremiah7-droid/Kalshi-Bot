@@ -5,6 +5,10 @@ import requests
 from .models import TradeSignal
 
 
+class TelegramRejectedError(RuntimeError):
+    """Telegram definitively rejected a message before accepting delivery."""
+
+
 class TelegramNotifier:
     def __init__(self, bot_token: str, chat_id: str, timeout: int = 15) -> None:
         self.bot_token = bot_token
@@ -74,18 +78,35 @@ class TelegramNotifier:
 
     def send(self, signal: TradeSignal) -> int:
         if not self.bot_token or not self.chat_id:
-            raise RuntimeError("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are required to send")
+            raise TelegramRejectedError(
+                "TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are required to send"
+            )
         url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
         response = requests.post(
             url,
             json={"chat_id": self.chat_id, "text": self.format_signal(signal)},
             timeout=self.timeout,
         )
+
+        # A Telegram 4xx is a definitive client-side rejection (bad token/chat,
+        # malformed request, blocked bot, etc.). It is safe to release the local
+        # reservation so a corrected configuration can retry later. 5xx/network
+        # failures remain uncertain because delivery could have happened before
+        # the connection failed.
+        if 400 <= response.status_code < 500:
+            raise TelegramRejectedError(
+                f"Telegram rejected signal with HTTP {response.status_code}: {response.text[:300]}"
+            )
         response.raise_for_status()
+
         payload = response.json()
-        if not isinstance(payload, dict) or not payload.get("ok"):
-            raise RuntimeError(f"Telegram rejected signal: {payload}")
+        if not isinstance(payload, dict):
+            raise RuntimeError("Telegram returned an unexpected response payload")
+        if not payload.get("ok"):
+            raise TelegramRejectedError(f"Telegram rejected signal: {payload}")
         message_id = payload.get("result", {}).get("message_id")
         if message_id is None:
+            # ok=true means Telegram accepted the request; missing message_id is
+            # therefore delivery-uncertain rather than a definitive rejection.
             raise RuntimeError("Telegram accepted request without a message_id")
         return int(message_id)
