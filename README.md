@@ -17,6 +17,7 @@ A research-first XAU/USD signal engine. The company researches a large strategy 
 11. **Risk Team** — volatility/session guards plus high-impact-news vetoes.
 12. **Strategy Selector + Boss** — chooses the researched strategy best suited to the current market and computes final risk geometry.
 13. **Outcome & Calibration Bot** — permanently records emitted signals, resolves later TP/SL outcomes, tracks forward win rate/Brier score and calibrates future release confidence.
+14. **Trade Frequency Guard** — allows qualified setups Monday-Friday only and enforces a persistent maximum of two emitted trades/signals per local trading day.
 
 ## Research model
 
@@ -51,6 +52,16 @@ If forward-calibrated confidence falls below `MIN_CONFIDENCE`, the signal is vet
 
 The ledger also prevents the same execution-candle signal from being resent after a restart. The SQLite file is deliberately excluded from Git so live/paper outcome history remains runtime data rather than source code.
 
+## Trade frequency policy
+
+Trading is setup-dependent; the company never forces a trade just to hit a quota.
+
+- Monday-Friday only in `TRADE_TIMEZONE`.
+- Default timezone: `America/Chicago`.
+- The company may emit **0, 1, or 2** qualified trades/signals in a day.
+- `MAX_TRADES_PER_DAY=2` is a hard cap; after the second trade, later setups are vetoed until the next local trading day.
+- The count is read from the persistent outcome ledger, so restarting the process does not reset the daily limit.
+
 ## Main settings
 
 ```text
@@ -66,6 +77,8 @@ OUTCOME_DB_PATH=data/xau_outcomes.sqlite3
 OUTCOME_MAX_AGE_HOURS=72
 CALIBRATION_BIN_WIDTH=0.05
 CALIBRATION_PRIOR_STRENGTH=20
+TRADE_TIMEZONE=America/Chicago
+MAX_TRADES_PER_DAY=2
 ```
 
 ## Setup
@@ -98,6 +111,7 @@ XAU COMPANY SIGNAL
 Symbol: XAU/USD
 Action: BUY
 Strategy: <selected researched strategy>
+Daily trade slot: 1/2
 OOS validation: <walk-forward result>
 Profit factor: <PF>
 Avg R: <average R> / Max DD: <drawdown in R>
