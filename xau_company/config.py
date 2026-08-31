@@ -73,10 +73,17 @@ class Settings:
         allowed = {"1min", "5min", "15min", "30min", "45min", "1h", "2h", "4h", "8h", "1day"}
         if not self.twelve_data_api_key:
             raise RuntimeError("TWELVE_DATA_API_KEY is required")
+        if not self.paper_mode and (not self.telegram_bot_token or not self.telegram_chat_id):
+            raise RuntimeError(
+                "TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are required when PAPER_MODE=false"
+            )
         if not 0.5 <= self.min_confidence <= 0.99:
             raise ValueError("MIN_CONFIDENCE must be between 0.50 and 0.99")
-        if not 1 <= self.min_consensus <= 8:
-            raise ValueError("MIN_CONSENSUS must be between 1 and 8")
+        # The selector intentionally counts only the six directional specialist
+        # desks here; timeframe/macro/veto desks are scored separately so they are
+        # not double-counted as consensus votes.
+        if not 1 <= self.min_consensus <= 6:
+            raise ValueError("MIN_CONSENSUS must be between 1 and 6")
         if self.output_size < 300:
             raise ValueError("OUTPUT_SIZE must be at least 300")
         if self.context_output_size < 220:
