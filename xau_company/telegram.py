@@ -31,7 +31,7 @@ class TelegramNotifier:
         validation_line = ""
         if isinstance(valid, (int, float)) and oos_trades is not None:
             fold_text = f" / {folds} walk-forward folds" if folds else ""
-            validation_line = f"OOS validation: {valid:.1%} over {oos_trades} OOS trades{fold_text}\n"
+            validation_line = f"OOS validation: {valid:.1%} over {oos_trades} OOS executed trades{fold_text}\n"
         pf_line = f"Profit factor: {pf:.2f}\n" if isinstance(pf, (int, float)) else ""
         lifecycle_line = ""
         if isinstance(avg_r, (int, float)) and isinstance(max_dd, (int, float)):
