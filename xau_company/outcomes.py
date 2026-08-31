@@ -87,7 +87,7 @@ class OutcomeCalibrationAgent:
             )
 
     @staticmethod
-    def _utc_iso(value: datetime | pd.Timestamp | str) -> str:
+    def utc_iso(value: datetime | pd.Timestamp | str) -> str:
         ts = pd.Timestamp(value)
         if ts.tzinfo is None:
             ts = ts.tz_localize("UTC")
@@ -115,7 +115,7 @@ class OutcomeCalibrationAgent:
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
     def exists(self, signal: TradeSignal, observed_at: datetime | pd.Timestamp | str) -> bool:
-        observed = self._utc_iso(observed_at)
+        observed = self.utc_iso(observed_at)
         key = self._signal_key(signal, observed)
         with self._connect() as conn:
             row = conn.execute(
@@ -129,7 +129,7 @@ class OutcomeCalibrationAgent:
         observed_at: datetime | pd.Timestamp | str,
         selection_confidence: float | None = None,
     ) -> bool:
-        observed = self._utc_iso(observed_at)
+        observed = self.utc_iso(observed_at)
         raw_conf = float(signal.confidence if selection_confidence is None else selection_confidence)
         calibrated = float(signal.confidence)
         key = self._signal_key(signal, observed)
@@ -207,13 +207,13 @@ class OutcomeCalibrationAgent:
 
                     if stop_hit:
                         resolved_status = "LOSS"
-                        resolved_at = self._utc_iso(candle.datetime)
+                        resolved_at = self.utc_iso(candle.datetime)
                         resolved_price = float(row["stop_loss"])
                         counts["losses"] += 1
                         break
                     if target_hit:
                         resolved_status = "WIN"
-                        resolved_at = self._utc_iso(candle.datetime)
+                        resolved_at = self.utc_iso(candle.datetime)
                         resolved_price = float(row["take_profit"])
                         counts["wins"] += 1
                         break
@@ -222,7 +222,7 @@ class OutcomeCalibrationAgent:
                     age_hours = (latest - observed).total_seconds() / 3600.0
                     if age_hours >= self.max_age_hours:
                         resolved_status = "EXPIRED"
-                        resolved_at = self._utc_iso(latest)
+                        resolved_at = self.utc_iso(latest)
                         counts["expired"] += 1
 
                 if resolved_status is not None:
@@ -282,14 +282,18 @@ class OutcomeCalibrationAgent:
         if n == 0:
             return CalibrationResult(raw, 0, 0, self._brier_score())
 
-        posterior = (wins + raw * self.prior_strength) / (n + self.prior_strength)
+        global_posterior = (wins + raw * self.prior_strength) / (n + self.prior_strength)
+        posterior = global_posterior
         used_n, used_wins = n, wins
 
         family = self._family(strategy)
         context_n, context_wins = self._resolved_stats(lower, upper, family, regime)
-        if context_n >= 8:
-            context_prior = max(8.0, self.prior_strength * 0.5)
-            posterior = (context_wins + posterior * context_prior) / (context_n + context_prior)
+        if context_n >= 8 and (family or regime):
+            context_posterior = (
+                context_wins + raw * self.prior_strength
+            ) / (context_n + self.prior_strength)
+            context_weight = min(0.65, context_n / (context_n + 20.0))
+            posterior = global_posterior * (1.0 - context_weight) + context_posterior * context_weight
             used_n, used_wins = context_n, context_wins
 
         calibrated = float(np.clip(posterior, 0.05, 0.95))
