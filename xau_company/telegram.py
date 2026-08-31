@@ -16,7 +16,7 @@ class TelegramNotifier:
         strategy = s.selected_strategy or "not reported"
         stats = s.strategy_stats or {}
         valid = stats.get("walk_forward_hit_rate", stats.get("valid_hit_rate"))
-        trades = stats.get("trades")
+        oos_trades = stats.get("oos_trades", stats.get("trades"))
         folds = stats.get("folds")
         pf = stats.get("profit_factor")
         avg_r = stats.get("avg_r_multiple")
@@ -29,9 +29,9 @@ class TelegramNotifier:
         daily_cap = stats.get("daily_trade_cap")
 
         validation_line = ""
-        if isinstance(valid, (int, float)) and trades is not None:
+        if isinstance(valid, (int, float)) and oos_trades is not None:
             fold_text = f" / {folds} walk-forward folds" if folds else ""
-            validation_line = f"OOS validation: {valid:.1%} over {trades} executed trades{fold_text}\n"
+            validation_line = f"OOS validation: {valid:.1%} over {oos_trades} OOS trades{fold_text}\n"
         pf_line = f"Profit factor: {pf:.2f}\n" if isinstance(pf, (int, float)) else ""
         lifecycle_line = ""
         if isinstance(avg_r, (int, float)) and isinstance(max_dd, (int, float)):
@@ -72,7 +72,7 @@ class TelegramNotifier:
             "Research signal only; live fills/slippage can differ."
         )
 
-    def send(self, signal: TradeSignal) -> None:
+    def send(self, signal: TradeSignal) -> int:
         if not self.bot_token or not self.chat_id:
             raise RuntimeError("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are required to send")
         url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
@@ -82,3 +82,10 @@ class TelegramNotifier:
             timeout=self.timeout,
         )
         response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict) or not payload.get("ok"):
+            raise RuntimeError(f"Telegram rejected signal: {payload}")
+        message_id = payload.get("result", {}).get("message_id")
+        if message_id is None:
+            raise RuntimeError("Telegram accepted request without a message_id")
+        return int(message_id)
