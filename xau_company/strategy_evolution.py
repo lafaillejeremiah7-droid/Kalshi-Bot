@@ -187,23 +187,31 @@ class StrategyEvolutionAgent:
         }
 
     def propose(self, scores: Iterable[Any]) -> int:
-        """Create novel cross-family ensembles without evicting protected history."""
+        """Continuously rotate experiments without ever evicting protected history."""
         if self.discoveries_per_cycle <= 0:
             return 0
 
         with self._exclusive_lock():
             rows = self._bounded_rows(self._read_unlocked())
-            protected_count = sum(row.get("status") in {"PROMOTED", "QUARANTINED"} for row in rows)
-            experiment_count = len(rows) - protected_count
-            free_slots = max(0, self.max_library_size - protected_count - experiment_count)
-            if free_slots <= 0:
+            protected = [row for row in rows if row.get("status") in {"PROMOTED", "QUARANTINED"}]
+            experiments = [row for row in rows if row.get("status") not in {"PROMOTED", "QUARANTINED"}]
+            experiment_capacity = max(0, self.max_library_size - len(protected))
+            if experiment_capacity <= 0:
                 return 0
-            limit = min(self.discoveries_per_cycle, free_slots)
 
-            existing = {
+            limit = min(self.discoveries_per_cycle, experiment_capacity)
+            # Preserve the keys of entries rotated out during this cycle so they
+            # are not immediately regenerated from the same parent pair.
+            prior_keys = {
                 self.spec_key(str(row.get("family", "")), row.get("params", []))
                 for row in rows
             }
+            slots_needed = max(0, limit - max(0, experiment_capacity - len(experiments)))
+            if slots_needed:
+                experiments = experiments[min(slots_needed, len(experiments)) :]
+            rows = protected + experiments
+            existing = set(prior_keys)
+
             parents = []
             seen_parents: set[str] = set()
             for score in scores:
