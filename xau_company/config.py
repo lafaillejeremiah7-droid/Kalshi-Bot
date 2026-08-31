@@ -35,9 +35,7 @@ class Settings:
     min_walk_forward_folds: int = int(os.getenv("MIN_WALK_FORWARD_FOLDS", "2"))
     research_every_cycles: int = int(os.getenv("RESEARCH_EVERY_CYCLES", "60"))
     enable_strategy_evolution: bool = _bool("ENABLE_STRATEGY_EVOLUTION", True)
-    strategy_library_path: str = os.getenv(
-        "STRATEGY_LIBRARY_PATH", "data/discovered_strategies.json"
-    )
+    strategy_library_path: str = os.getenv("STRATEGY_LIBRARY_PATH", "data/discovered_strategies.json")
     discoveries_per_cycle: int = int(os.getenv("DISCOVERIES_PER_CYCLE", "250"))
     discovery_library_size: int = int(os.getenv("DISCOVERY_LIBRARY_SIZE", "5000"))
     overfit_min_adjusted_score: float = float(os.getenv("OVERFIT_MIN_ADJUSTED_SCORE", "0.60"))
@@ -58,6 +56,7 @@ class Settings:
     calibration_prior_strength: float = float(os.getenv("CALIBRATION_PRIOR_STRENGTH", "20"))
     trade_timezone: str = os.getenv("TRADE_TIMEZONE", "America/Chicago")
     max_trades_per_day: int = int(os.getenv("MAX_TRADES_PER_DAY", "2"))
+    max_stale_multiplier: float = float(os.getenv("MAX_STALE_MULTIPLIER", "4.0"))
     paper_mode: bool = _bool("PAPER_MODE", True)
     dxy_symbol: str = os.getenv("DXY_SYMBOL", "DXY")
     yield_symbol: str = os.getenv("YIELD_SYMBOL", "US10Y")
@@ -70,18 +69,29 @@ class Settings:
         return tuple(x.strip() for x in self.timeframe_csv.split(",") if x.strip())
 
     def validate(self) -> None:
+        allowed = {"1min", "5min", "15min", "30min", "45min", "1h", "2h", "4h", "8h", "1day"}
         if not self.twelve_data_api_key:
             raise RuntimeError("TWELVE_DATA_API_KEY is required")
         if not 0.5 <= self.min_confidence <= 0.99:
             raise ValueError("MIN_CONFIDENCE must be between 0.50 and 0.99")
+        if not 1 <= self.min_consensus <= 8:
+            raise ValueError("MIN_CONSENSUS must be between 1 and 8")
         if self.output_size < 300:
             raise ValueError("OUTPUT_SIZE must be at least 300")
+        if self.context_output_size < 220:
+            raise ValueError("CONTEXT_OUTPUT_SIZE must be at least 220")
+        if self.poll_seconds < 10:
+            raise ValueError("POLL_SECONDS must be at least 10")
+        if self.research_every_cycles < 1:
+            raise ValueError("RESEARCH_EVERY_CYCLES must be at least 1")
         if self.max_candidates < 1000:
             raise ValueError("MAX_CANDIDATES must be at least 1000")
         if self.research_catalog_size < 50:
             raise ValueError("RESEARCH_CATALOG_SIZE must be at least 50")
         if self.walk_forward_folds < 2:
             raise ValueError("WALK_FORWARD_FOLDS must be at least 2")
+        if not 2 <= self.min_walk_forward_folds <= self.walk_forward_folds:
+            raise ValueError("MIN_WALK_FORWARD_FOLDS must be between 2 and WALK_FORWARD_FOLDS")
         if self.discoveries_per_cycle < 0:
             raise ValueError("DISCOVERIES_PER_CYCLE cannot be negative")
         if self.discovery_library_size < 100:
@@ -116,13 +126,22 @@ class Settings:
             raise ValueError("CALIBRATION_PRIOR_STRENGTH must be at least 5")
         if not 1 <= self.max_trades_per_day <= 2:
             raise ValueError("MAX_TRADES_PER_DAY must be 1 or 2")
+        if self.max_stale_multiplier < 1.5:
+            raise ValueError("MAX_STALE_MULTIPLIER must be at least 1.5")
         try:
             ZoneInfo(self.trade_timezone)
         except ZoneInfoNotFoundError as exc:
             raise ValueError(f"Unknown TRADE_TIMEZONE: {self.trade_timezone}") from exc
-        allowed = {"1min", "5min", "15min", "30min", "45min", "1h", "2h", "4h", "8h", "1day"}
         invalid = set(self.timeframes) - allowed
         if invalid:
             raise ValueError(f"Unsupported TIMEFRAMES: {sorted(invalid)}")
         if self.research_interval not in allowed:
             raise ValueError("Unsupported RESEARCH_INTERVAL")
+        if self.macro_interval not in allowed:
+            raise ValueError("Unsupported MACRO_INTERVAL")
+        required = {self.research_interval, "1h", "4h"}
+        missing = required - set(self.timeframes)
+        if missing:
+            raise ValueError(f"TIMEFRAMES must include research/1h/4h context: {sorted(missing)}")
+        if not {"1min", "5min"}.intersection(self.timeframes):
+            raise ValueError("TIMEFRAMES must include 1min or 5min for execution")
