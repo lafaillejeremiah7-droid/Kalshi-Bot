@@ -24,6 +24,8 @@ jobs:
       - name: Compile audit path
         run: python -m compileall -q xau_company scripts/real_data_overfit_audit.py
       - name: Run real XAUUSD overfit audit
+        env:
+          PYTHONPATH: .
         run: python scripts/real_data_overfit_audit.py
       - name: Upload audit report
         if: always()
