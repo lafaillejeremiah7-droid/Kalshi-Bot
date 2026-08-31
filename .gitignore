@@ -6,6 +6,8 @@ __pycache__/
 .DS_Store
 data/*.sqlite3
 data/*.sqlite3-*
+data/dashboard_state.json
+data/dashboard_state.json.tmp
 data/discovered_strategies.json
 data/discovered_strategies.json.tmp
 data/discovered_strategies.json.meta.json
