@@ -43,7 +43,7 @@ def test_outcomes_ignore_price_action_before_actual_emission(tmp_path):
     )
 
     resolved = tracker.resolve_open(candles)
-    assert resolved == {"wins": 1, "losses": 0, "expired": 0}
+    assert resolved == {"wins": 1, "losses": 0, "expired": 0, "ambiguous": 0}
     summary = tracker.summary()
     assert summary["wins"] == 1
     assert summary["losses"] == 0
