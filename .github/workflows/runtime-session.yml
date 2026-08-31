@@ -1,0 +1,79 @@
+name: On-Demand XAUUSD Company
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "runtime-control.json"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Read requested state
+        id: control
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, os
+          with open("runtime-control.json", "r", encoding="utf-8") as handle:
+              payload = json.load(handle)
+          enabled = payload.get("enabled") is True
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as handle:
+              handle.write(f"enabled={'true' if enabled else 'false'}\n")
+          print(f"Requested runtime state: {'ON' if enabled else 'OFF'}")
+          PY
+
+      - name: Install dependencies
+        if: steps.control.outputs.enabled == 'true'
+        run: pip install -r requirements.txt
+
+      - name: Restore persistent runtime state
+        if: steps.control.outputs.enabled == 'true'
+        uses: actions/cache@v4
+        with:
+          path: data
+          key: xau-runtime-state-${{ github.run_id }}
+          restore-keys: |
+            xau-runtime-state-
+
+      - name: Verify live data and Telegram
+        if: steps.control.outputs.enabled == 'true'
+        env:
+          TWELVE_DATA_API_KEY: ${{ secrets.TWELVE_DATA_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SYMBOL: XAU/USD
+        run: python -m xau_company.preflight
+
+      - name: Run company until OFF
+        if: steps.control.outputs.enabled == 'true'
+        env:
+          TWELVE_DATA_API_KEY: ${{ secrets.TWELVE_DATA_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          PAPER_MODE: "false"
+          RUNTIME_CONTROL_URL: https://raw.githubusercontent.com/lafaillejeremiah7-droid/XAUUSD-Company/main/runtime-control.json
+          RUNTIME_CONTROL_POLL_SECONDS: "15"
+          RUNTIME_CONTROL_MAX_FAILURES: "2"
+        run: python -m xau_company.runtime_control
+
+      - name: Archive session state
+        if: always() && steps.control.outputs.enabled == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: xau-runtime-state-${{ github.run_id }}
+          path: data
+          if-no-files-found: ignore
+          retention-days: 30
