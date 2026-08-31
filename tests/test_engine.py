@@ -74,7 +74,7 @@ def test_outcome_ledger_dedupes_and_resolves_collision_as_loss(tmp_path):
         "low": [97.0],
     })
     resolved = tracker.resolve_open(candles)
-    assert resolved == {"wins": 0, "losses": 1, "expired": 0}
+    assert resolved == {"wins": 0, "losses": 1, "expired": 0, "ambiguous": 0}
     summary = tracker.summary()
     assert summary["resolved"] == 1
     assert summary["losses"] == 1
