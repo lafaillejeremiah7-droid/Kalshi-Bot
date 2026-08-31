@@ -36,6 +36,10 @@ class Settings:
     slippage_bps: float = float(os.getenv("SLIPPAGE_BPS", "0.5"))
     backtest_stop_atr: float = float(os.getenv("BACKTEST_STOP_ATR", "1.20"))
     backtest_reward_risk: float = float(os.getenv("BACKTEST_REWARD_RISK", "1.70"))
+    outcome_db_path: str = os.getenv("OUTCOME_DB_PATH", "data/xau_outcomes.sqlite3")
+    outcome_max_age_hours: int = int(os.getenv("OUTCOME_MAX_AGE_HOURS", "72"))
+    calibration_bin_width: float = float(os.getenv("CALIBRATION_BIN_WIDTH", "0.05"))
+    calibration_prior_strength: float = float(os.getenv("CALIBRATION_PRIOR_STRENGTH", "20"))
     paper_mode: bool = _bool("PAPER_MODE", True)
     dxy_symbol: str = os.getenv("DXY_SYMBOL", "DXY")
     yield_symbol: str = os.getenv("YIELD_SYMBOL", "US10Y")
@@ -66,6 +70,12 @@ class Settings:
             raise ValueError("BACKTEST_STOP_ATR must be positive")
         if self.backtest_reward_risk <= 0:
             raise ValueError("BACKTEST_REWARD_RISK must be positive")
+        if self.outcome_max_age_hours < 1:
+            raise ValueError("OUTCOME_MAX_AGE_HOURS must be at least 1")
+        if not 0.02 <= self.calibration_bin_width <= 0.20:
+            raise ValueError("CALIBRATION_BIN_WIDTH must be between 0.02 and 0.20")
+        if self.calibration_prior_strength < 5:
+            raise ValueError("CALIBRATION_PRIOR_STRENGTH must be at least 5")
         allowed = {"1min", "5min", "15min", "30min", "45min", "1h", "2h", "4h", "8h", "1day"}
         invalid = set(self.timeframes) - allowed
         if invalid:
