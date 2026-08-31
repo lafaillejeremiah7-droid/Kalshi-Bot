@@ -84,6 +84,9 @@ class OutcomeCalibrationAgent:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_signal_outcomes_context ON signal_outcomes(strategy_family, regime, status)"
             )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_signal_outcomes_observed_at ON signal_outcomes(observed_at)"
+            )
 
     @staticmethod
     def utc_iso(value: datetime | pd.Timestamp | str) -> str:
@@ -121,6 +124,25 @@ class OutcomeCalibrationAgent:
                 "SELECT 1 FROM signal_outcomes WHERE signal_key = ? LIMIT 1", (key,)
             ).fetchone()
         return row is not None
+
+    def count_emitted_between(
+        self,
+        start_at: datetime | pd.Timestamp | str,
+        end_at: datetime | pd.Timestamp | str,
+    ) -> int:
+        """Count all emitted paper/live signals in a UTC half-open interval."""
+        start = self.utc_iso(start_at)
+        end = self.utc_iso(end_at)
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS n
+                FROM signal_outcomes
+                WHERE observed_at >= ? AND observed_at < ?
+                """,
+                (start, end),
+            ).fetchone()
+        return int(row["n"] or 0)
 
     def record(
         self,
