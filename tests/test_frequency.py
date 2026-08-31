@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from xau_company.frequency import TradeFrequencyGuard
 from xau_company.models import Direction, TradeSignal
 from xau_company.outcomes import OutcomeCalibrationAgent
+from xau_company.telegram import TelegramNotifier
 
 
 def _signal(strategy: str, entry: float) -> TradeSignal:
@@ -65,3 +66,13 @@ def test_trade_day_uses_chicago_calendar_not_utc_calendar():
     start, end = guard.day_bounds_utc(now)
     assert start == datetime(2026, 8, 31, 5, 0, tzinfo=timezone.utc)
     assert end == datetime(2026, 9, 1, 5, 0, tzinfo=timezone.utc)
+
+
+def test_telegram_shows_daily_trade_slot():
+    signal = _signal("trend(5, 30, 0.0)", 2500)
+    signal.strategy_stats = {
+        "trades_today_before_signal": 1,
+        "daily_trade_cap": 2,
+    }
+    text = TelegramNotifier("", "").format_signal(signal)
+    assert "Daily trade slot: 2/2" in text
