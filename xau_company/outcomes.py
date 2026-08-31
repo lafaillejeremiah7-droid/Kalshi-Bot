@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -113,6 +113,15 @@ class OutcomeCalibrationAgent:
             ]
         )
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    def exists(self, signal: TradeSignal, observed_at: datetime | pd.Timestamp | str) -> bool:
+        observed = self._utc_iso(observed_at)
+        key = self._signal_key(signal, observed)
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM signal_outcomes WHERE signal_key = ? LIMIT 1", (key,)
+            ).fetchone()
+        return row is not None
 
     def record(
         self,
