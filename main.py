@@ -6,12 +6,12 @@ from datetime import datetime, timezone
 
 import pandas as pd
 
+from xau_company.adaptive_research import AdaptiveStrategyResearchAgent
 from xau_company.config import Settings
 from xau_company.data import TwelveDataClient
 from xau_company.frequency import TradeFrequencyGuard
 from xau_company.orchestrator import BossAgent
 from xau_company.outcomes import OutcomeCalibrationAgent
-from xau_company.research import StrategyResearchAgent
 from xau_company.telegram import TelegramNotifier
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -38,7 +38,7 @@ def run() -> None:
     cfg = Settings()
     cfg.validate()
     market = TwelveDataClient(cfg.twelve_data_api_key)
-    lab = StrategyResearchAgent(
+    lab = AdaptiveStrategyResearchAgent(
         max_candidates=cfg.max_candidates,
         spread_bps=cfg.spread_bps,
         walk_forward_folds=cfg.walk_forward_folds,
@@ -47,6 +47,10 @@ def run() -> None:
         slippage_bps=cfg.slippage_bps,
         backtest_stop_atr=cfg.backtest_stop_atr,
         backtest_reward_risk=cfg.backtest_reward_risk,
+        enable_evolution=cfg.enable_strategy_evolution,
+        strategy_library_path=cfg.strategy_library_path,
+        discoveries_per_cycle=cfg.discoveries_per_cycle,
+        discovery_library_size=cfg.discovery_library_size,
     )
     outcomes = OutcomeCalibrationAgent(
         db_path=cfg.outcome_db_path,
@@ -101,11 +105,14 @@ def run() -> None:
                 frames[cfg.research_interval] = research_df
                 top = lab.run(research_df)
                 log.info(
-                    "Strategy lab universe=%s evaluated=%s robust_catalog=%s top=%s walk_forward_folds=%s spread_bps=%.2f slippage_bps=%.2f",
+                    "Strategy lab universe=%s evaluated=%s robust_catalog=%s top=%s dynamic_library=%s discovered=%s promoted=%s walk_forward_folds=%s spread_bps=%.2f slippage_bps=%.2f",
                     lab.last_universe_size,
                     lab.last_evaluated,
                     len(lab.catalog),
                     len(top),
+                    lab.dynamic_library_size,
+                    lab.last_discovered,
+                    lab.last_promoted,
                     lab.walk_forward_folds,
                     cfg.spread_bps,
                     cfg.slippage_bps,
