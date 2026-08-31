@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#07111f" />
+  <title>XAU/USD Trading Company HQ</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand-lockup">
+        <div class="gold-logo" aria-hidden="true"><span></span><span></span><span></span></div>
+        <div>
+          <div class="brand-title">XAU/USD TRADING COMPANY</div>
+          <div class="brand-subtitle">27 AI EMPLOYEES · LIVE OPERATIONS FLOOR</div>
+        </div>
+      </div>
+
+      <nav class="nav-tabs" aria-label="Dashboard sections">
+        <button class="nav-tab active" data-room-filter="all">Company HQ</button>
+        <button class="nav-tab" data-room-filter="research">Research Lab</button>
+        <button class="nav-tab" data-room-filter="analysis">Market Analysis</button>
+        <button class="nav-tab" data-room-filter="decision">Decision Room</button>
+        <button class="nav-tab" data-room-filter="performance">Performance</button>
+      </nav>
+
+      <div class="system-strip">
+        <div class="status-pill" id="systemStatus">
+          <span class="status-dot"></span>
+          <span><b>WAITING</b><small>runtime status</small></span>
+        </div>
+        <div class="mini-stat"><span class="mini-icon">◷</span><span><b id="marketStatus">UNKNOWN</b><small>market</small></span></div>
+        <div class="mini-stat"><span class="mini-icon">↗</span><span><b id="telegramStatus">UNKNOWN</b><small>delivery</small></span></div>
+      </div>
+    </header>
+
+    <main class="dashboard-grid">
+      <section class="operations-floor" aria-label="Animated bot company floor">
+        <div class="floor-toolbar">
+          <div>
+            <span class="eyebrow">LIVE COMPANY MAP</span>
+            <h1>Watch every bot hand work to the next desk</h1>
+          </div>
+          <div class="floor-summary">
+            <span><b id="activeCount">0</b>/27 active</span>
+            <span class="divider"></span>
+            <span id="headlineText">Waiting for runtime</span>
+          </div>
+        </div>
+
+        <div class="floorplan" id="floorplan"></div>
+
+        <div class="conveyor" aria-hidden="true">
+          <div class="conveyor-track"></div>
+          <div class="conveyor-label">LIVE DOCUMENT ROUTING · MARKET DATA → RESEARCH → ANALYSIS → SELECTOR → BOSS → OUTCOMES</div>
+        </div>
+      </section>
+
+      <aside class="command-column">
+        <section class="panel boss-panel" id="bossPanel">
+          <div class="panel-heading">
+            <span class="crown">♛</span>
+            <span>BOSS FINAL DECISION</span>
+            <span class="decision-live" id="decisionPulse">STANDBY</span>
+          </div>
+          <div class="boss-body">
+            <div class="decision-main">
+              <div class="decision-word hold" id="decisionWord">HOLD</div>
+              <div class="decision-symbol" id="decisionSymbol">XAU/USD</div>
+              <div class="decision-reason" id="decisionReason">Waiting for synchronized bot output</div>
+            </div>
+            <div class="price-grid">
+              <div><span>ENTRY</span><b id="entryValue">—</b></div>
+              <div><span>STOP LOSS</span><b class="loss" id="slValue">—</b></div>
+              <div><span>TAKE PROFIT</span><b class="profit" id="tpValue">—</b></div>
+            </div>
+            <div class="strategy-card">
+              <span>Selected Strategy</span>
+              <b id="strategyValue">No decision yet</b>
+              <div class="confidence-row">
+                <span>Confidence</span>
+                <div class="confidence-bar"><i id="confidenceBar"></i></div>
+                <b id="confidenceValue">—</b>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel flow-panel">
+          <div class="panel-heading"><span>DOCUMENT FLOW</span><span class="subtle" id="eventCount">0 EVENTS</span></div>
+          <div class="activity-log" id="activityLog">
+            <div class="empty-log">Waiting for the company to move its first file.</div>
+          </div>
+        </section>
+
+        <section class="panel legend-panel">
+          <div class="panel-heading"><span>WHAT THE ANIMATIONS MEAN</span></div>
+          <div class="legend-grid">
+            <div><i class="legend-dot working"></i><span><b>Working</b><small>analyzing / calculating</small></span></div>
+            <div><i class="legend-dot handoff"></i><span><b>Passing paper</b><small>sending output downstream</small></span></div>
+            <div><i class="legend-dot receiving"></i><span><b>Receiving</b><small>new report arrived</small></span></div>
+            <div><i class="legend-dot blocked"></i><span><b>Veto</b><small>guard stopped the trade</small></span></div>
+            <div><i class="legend-dot done"></i><span><b>Complete</b><small>task finished successfully</small></span></div>
+            <div><i class="legend-dot idle"></i><span><b>Idle</b><small>waiting for work</small></span></div>
+          </div>
+        </section>
+      </aside>
+    </main>
+
+    <section class="bottom-grid">
+      <div class="panel recent-panel">
+        <div class="panel-heading"><span>RECENT SIGNALS</span><span class="subtle">FORWARD OUTCOME LEDGER</span></div>
+        <div class="signal-table-wrap">
+          <table class="signal-table">
+            <thead><tr><th>TIME</th><th>DIRECTION</th><th>STRATEGY</th><th>CONF.</th><th>ENTRY</th><th>RESULT</th><th>DELIVERY</th></tr></thead>
+            <tbody id="signalRows"><tr><td colspan="7" class="empty-row">No recorded signals yet.</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel performance-panel">
+        <div class="panel-heading"><span>COMPANY PERFORMANCE</span><span class="subtle">REAL OUTCOME DB</span></div>
+        <div class="metric-grid">
+          <div class="metric"><span>SIGNALS</span><b id="metricSignals">0</b></div>
+          <div class="metric"><span>RESOLVED</span><b id="metricResolved">0</b></div>
+          <div class="metric"><span>WINS</span><b class="profit" id="metricWins">0</b></div>
+          <div class="metric"><span>LOSSES</span><b class="loss" id="metricLosses">0</b></div>
+          <div class="metric wide"><span>WIN RATE</span><b id="metricWinRate">—</b></div>
+          <div class="metric wide"><span>CALIBRATION (BRIER)</span><b id="metricBrier">—</b></div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <div id="handoffLayer" class="handoff-layer" aria-hidden="true"></div>
+  <script src="/app.js" defer></script>
+</body>
+</html>
