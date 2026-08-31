@@ -8,6 +8,7 @@ import pandas as pd
 
 from xau_company.config import Settings
 from xau_company.data import TwelveDataClient
+from xau_company.frequency import TradeFrequencyGuard
 from xau_company.orchestrator import BossAgent
 from xau_company.outcomes import OutcomeCalibrationAgent
 from xau_company.research import StrategyResearchAgent
@@ -52,6 +53,10 @@ def run() -> None:
         max_age_hours=cfg.outcome_max_age_hours,
         bin_width=cfg.calibration_bin_width,
         prior_strength=cfg.calibration_prior_strength,
+    )
+    frequency = TradeFrequencyGuard(
+        timezone_name=cfg.trade_timezone,
+        max_trades_per_day=cfg.max_trades_per_day,
     )
     boss = BossAgent(
         lab,
@@ -148,29 +153,52 @@ def run() -> None:
                         round(signal.take_profit, 1),
                     )
                     already_recorded = outcomes.exists(signal, signal_setup_at)
-                    if fingerprint != last_fingerprint and not already_recorded:
-                        emitted_at = datetime.now(timezone.utc)
-                        log.info(
-                            "Signal %s using %s raw_confidence %.1f%% calibrated_confidence %.1f%% samples=%s",
-                            signal.direction.value,
-                            signal.selected_strategy,
-                            raw_confidence * 100,
-                            signal.confidence * 100,
-                            calibration.samples,
-                        )
-                        if cfg.paper_mode:
-                            log.info("PAPER_MODE: %s", telegram.format_signal(signal).replace("\n", " | "))
-                        else:
-                            telegram.send(signal)
-                        outcomes.record(
-                            signal,
-                            emitted_at,
-                            selection_confidence=raw_confidence,
-                            setup_at=signal_setup_at,
-                        )
-                        last_fingerprint = fingerprint
-                    elif already_recorded:
+                    if already_recorded:
                         log.info("Duplicate signal suppressed by persistent outcome ledger")
+                    elif fingerprint != last_fingerprint:
+                        emitted_at = datetime.now(timezone.utc)
+                        day_start, day_end = frequency.day_bounds_utc(emitted_at)
+                        trades_today = outcomes.count_emitted_between(day_start, day_end)
+                        frequency_decision = frequency.evaluate(emitted_at, trades_today)
+
+                        if not frequency_decision.allowed:
+                            log.info(
+                                "Frequency veto: %s date=%s trades_today=%s max=%s timezone=%s",
+                                frequency_decision.reason,
+                                frequency_decision.local_date,
+                                frequency_decision.trades_today,
+                                cfg.max_trades_per_day,
+                                cfg.trade_timezone,
+                            )
+                        else:
+                            signal.strategy_stats.update(
+                                {
+                                    "trades_today_before_signal": frequency_decision.trades_today,
+                                    "daily_trade_cap": cfg.max_trades_per_day,
+                                    "trade_timezone": cfg.trade_timezone,
+                                }
+                            )
+                            log.info(
+                                "Signal %s using %s raw_confidence %.1f%% calibrated_confidence %.1f%% samples=%s daily_slot=%s/%s",
+                                signal.direction.value,
+                                signal.selected_strategy,
+                                raw_confidence * 100,
+                                signal.confidence * 100,
+                                calibration.samples,
+                                frequency_decision.trades_today + 1,
+                                cfg.max_trades_per_day,
+                            )
+                            if cfg.paper_mode:
+                                log.info("PAPER_MODE: %s", telegram.format_signal(signal).replace("\n", " | "))
+                            else:
+                                telegram.send(signal)
+                            outcomes.record(
+                                signal,
+                                emitted_at,
+                                selection_confidence=raw_confidence,
+                                setup_at=signal_setup_at,
+                            )
+                            last_fingerprint = fingerprint
             else:
                 log.info("No strategy passed research + market-context + risk thresholds")
         except Exception:
