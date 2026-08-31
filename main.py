@@ -75,7 +75,7 @@ def run() -> None:
 
             resolution_df = _pick_frame(frames, ("1min", "5min", "15min", "1h", "4h"))
             execution_df = _pick_frame(frames, ("5min", "1min", "15min"))
-            signal_observed_at = _frame_timestamp(execution_df)
+            signal_setup_at = _frame_timestamp(execution_df)
 
             if resolution_df is not None:
                 resolved = outcomes.resolve_open(resolution_df)
@@ -138,17 +138,18 @@ def run() -> None:
                         calibration.samples,
                     )
                 else:
-                    observed_key = OutcomeCalibrationAgent.utc_iso(signal_observed_at)
+                    setup_key = OutcomeCalibrationAgent.utc_iso(signal_setup_at)
                     fingerprint = (
-                        observed_key,
+                        setup_key,
                         signal.direction.value,
                         signal.selected_strategy,
                         round(signal.entry, 1),
                         round(signal.stop_loss, 1),
                         round(signal.take_profit, 1),
                     )
-                    already_recorded = outcomes.exists(signal, signal_observed_at)
+                    already_recorded = outcomes.exists(signal, signal_setup_at)
                     if fingerprint != last_fingerprint and not already_recorded:
+                        emitted_at = datetime.now(timezone.utc)
                         log.info(
                             "Signal %s using %s raw_confidence %.1f%% calibrated_confidence %.1f%% samples=%s",
                             signal.direction.value,
@@ -161,7 +162,12 @@ def run() -> None:
                             log.info("PAPER_MODE: %s", telegram.format_signal(signal).replace("\n", " | "))
                         else:
                             telegram.send(signal)
-                        outcomes.record(signal, signal_observed_at, selection_confidence=raw_confidence)
+                        outcomes.record(
+                            signal,
+                            emitted_at,
+                            selection_confidence=raw_confidence,
+                            setup_at=signal_setup_at,
+                        )
                         last_fingerprint = fingerprint
                     elif already_recorded:
                         log.info("Duplicate signal suppressed by persistent outcome ledger")
