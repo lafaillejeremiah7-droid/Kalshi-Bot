@@ -142,7 +142,7 @@ class AdaptiveStrategyResearchAgent(StrategyResearchAgent):
     def _refresh_live_catalog(
         self,
         research_catalog: list[CandidateScore],
-        seed_tested_trials: int,
+        seed_tested_trials: int | None = None,
     ) -> None:
         """Build live catalog only from strategies that passed their overfit gate."""
         evolved_promoted = self.evolution.promoted_keys() if self.enable_evolution else set()
@@ -151,6 +151,12 @@ class AdaptiveStrategyResearchAgent(StrategyResearchAgent):
         seed_audited = 0
         seed_rejected = 0
         seed_eligible = 0
+        resolved_seed_trials = max(
+            1,
+            int(seed_tested_trials)
+            if seed_tested_trials is not None
+            else max(self.last_evaluated, len(research_catalog)),
+        )
 
         for result in research_catalog:
             family = result.candidate.family
@@ -159,7 +165,7 @@ class AdaptiveStrategyResearchAgent(StrategyResearchAgent):
                 seed_audited += 1
                 audit = self.overfit_auditor.audit(
                     result,
-                    tested_trials=max(1, int(seed_tested_trials)),
+                    tested_trials=resolved_seed_trials,
                 )
                 if audit.passed:
                     eligible.append(result)
