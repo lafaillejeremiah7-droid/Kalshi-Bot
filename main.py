@@ -12,6 +12,7 @@ from xau_company.data import TwelveDataClient
 from xau_company.frequency import TradeFrequencyGuard
 from xau_company.orchestrator import BossAgent
 from xau_company.outcomes import OutcomeCalibrationAgent
+from xau_company.quality import MarketDataQualityAgent
 from xau_company.telegram import TelegramNotifier
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -23,7 +24,7 @@ def _pick_frame(frames: dict[str, pd.DataFrame], preferences: tuple[str, ...]) -
         frame = frames.get(timeframe)
         if frame is not None and not frame.empty:
             return frame
-    return next((df for df in frames.values() if df is not None and not df.empty), None)
+    return None
 
 
 def _frame_timestamp(frame: pd.DataFrame | None):
@@ -34,10 +35,26 @@ def _frame_timestamp(frame: pd.DataFrame | None):
     return datetime.now(timezone.utc)
 
 
+def _clean_optional_macro(
+    quality: MarketDataQualityAgent,
+    frame: pd.DataFrame | None,
+    interval: str,
+    now: datetime,
+) -> pd.DataFrame | None:
+    if frame is None or frame.empty:
+        return None
+    cleaned, report = quality.clean_frame(frame, interval, now=now, require_fresh=True)
+    return cleaned if report.ok else None
+
+
 def run() -> None:
     cfg = Settings()
     cfg.validate()
     market = TwelveDataClient(cfg.twelve_data_api_key)
+    quality = MarketDataQualityAgent(
+        max_stale_multiplier=cfg.max_stale_multiplier,
+        timezone_name=cfg.trade_timezone,
+    )
     lab = AdaptiveStrategyResearchAgent(
         max_candidates=cfg.max_candidates,
         spread_bps=cfg.spread_bps,
@@ -76,46 +93,98 @@ def run() -> None:
         cfg.min_consensus,
         cfg.high_impact_events_utc,
         cfg.news_block_minutes,
+        research_interval=cfg.research_interval,
     )
     telegram = TelegramNotifier(cfg.telegram_bot_token, cfg.telegram_chat_id)
 
     cycle = 0
-    last_fingerprint: tuple | None = None
+    last_research_success: int | None = None
     dxy = None
     yields = None
 
     while True:
         try:
-            frames = market.multi_timeframe(cfg.symbol, cfg.timeframes, cfg.context_output_size)
-            if not frames:
-                raise RuntimeError("No XAU/USD timeframes available")
+            now = datetime.now(timezone.utc)
+            if not quality.market_is_open(now):
+                log.info("Market-quality veto: XAU/USD session is closed")
+                cycle += 1
+                time.sleep(cfg.poll_seconds)
+                continue
 
-            resolution_df = _pick_frame(frames, ("1min", "5min", "15min", "1h", "4h"))
-            execution_df = _pick_frame(frames, ("5min", "1min", "15min"))
+            raw_frames = market.multi_timeframe(cfg.symbol, cfg.timeframes, cfg.context_output_size)
+            if not raw_frames:
+                raise RuntimeError("No XAU/USD timeframes available")
+            frames, reports = quality.clean_frames(
+                raw_frames,
+                now=now,
+                required_context=(cfg.research_interval, "1h", "4h"),
+                execution_choices=("1min", "5min"),
+            )
+            required_names = {cfg.research_interval, "1h", "4h", "execution"}
+            failures = [r for r in reports if not r.ok and r.timeframe in required_names]
+            if failures:
+                log.warning(
+                    "Market-quality veto: %s",
+                    "; ".join(f"{r.timeframe}: {r.reason}" for r in failures),
+                )
+                cycle += 1
+                time.sleep(cfg.poll_seconds)
+                continue
+
+            execution_df = _pick_frame(frames, ("5min", "1min"))
             signal_setup_at = _frame_timestamp(execution_df)
 
-            if resolution_df is not None:
-                resolved = outcomes.resolve_open(resolution_df)
-                if sum(resolved.values()):
-                    summary = outcomes.summary()
-                    log.info(
-                        "Outcome desk resolved wins=%s losses=%s expired=%s total_resolved=%s forward_win_rate=%s brier=%s",
-                        resolved["wins"],
-                        resolved["losses"],
-                        resolved["expired"],
-                        summary["resolved"],
-                        f"{summary['win_rate']:.1%}" if isinstance(summary["win_rate"], float) else "n/a",
-                        f"{summary['brier_score']:.4f}" if isinstance(summary["brier_score"], float) else "n/a",
-                    )
+            # Always fetch enough completed 1-minute history to cover the maximum
+            # persisted forward-outcome window after a long process outage.
+            resolution_size = min(
+                5000,
+                max(cfg.context_output_size, cfg.outcome_max_age_hours * 60 + 120),
+            )
+            raw_resolution = market.safe_candles(cfg.symbol, "1min", resolution_size)
+            if raw_resolution is not None:
+                resolution_df, resolution_report = quality.clean_frame(
+                    raw_resolution,
+                    "1min",
+                    now=now,
+                    require_fresh=True,
+                )
+                if resolution_report.ok:
+                    resolved = outcomes.resolve_open(resolution_df, interval_minutes=1)
+                    if sum(resolved.values()):
+                        summary = outcomes.summary()
+                        log.info(
+                            "Outcome desk resolved wins=%s losses=%s expired=%s ambiguous=%s total_resolved=%s forward_win_rate=%s brier=%s",
+                            resolved["wins"],
+                            resolved["losses"],
+                            resolved["expired"],
+                            resolved["ambiguous"],
+                            summary["resolved"],
+                            f"{summary['win_rate']:.1%}" if isinstance(summary["win_rate"], float) else "n/a",
+                            f"{summary['brier_score']:.4f}" if isinstance(summary["brier_score"], float) else "n/a",
+                        )
 
-            if cycle == 0 or cycle % cfg.research_every_cycles == 0:
-                research_df = market.candles(cfg.symbol, cfg.research_interval, cfg.output_size)
+            research_due = (
+                last_research_success is None
+                or cycle - last_research_success >= cfg.research_every_cycles
+            )
+            if research_due:
+                raw_research = market.candles(cfg.symbol, cfg.research_interval, cfg.output_size)
+                research_df, research_report = quality.clean_frame(
+                    raw_research,
+                    cfg.research_interval,
+                    now=now,
+                    require_fresh=True,
+                )
+                if not research_report.ok:
+                    raise RuntimeError(f"Research data rejected: {research_report.reason}")
                 frames[cfg.research_interval] = research_df
                 top = lab.run(research_df)
+                last_research_success = cycle
                 log.info(
-                    "Strategy lab universe=%s evaluated=%s live_catalog=%s experimental_catalog=%s top=%s dynamic_library=%s discovered=%s promoted=%s quarantined=%s walk_forward_folds=%s spread_bps=%.2f slippage_bps=%.2f",
+                    "Strategy lab universe=%s evaluated=%s lifetime_trials=%s live_catalog=%s experimental_catalog=%s top=%s dynamic_library=%s discovered=%s promoted=%s quarantined=%s walk_forward_folds=%s spread_bps=%.2f slippage_bps=%.2f",
                     lab.last_universe_size,
                     lab.last_evaluated,
+                    lab.last_lifetime_trials,
                     len(lab.catalog),
                     lab.last_experimental_catalog_size,
                     len(top),
@@ -129,10 +198,33 @@ def run() -> None:
                 )
 
             if cycle == 0 or cycle % 5 == 0:
-                dxy = market.safe_candles(cfg.dxy_symbol, cfg.macro_interval, cfg.context_output_size)
-                yields = market.safe_candles(cfg.yield_symbol, cfg.macro_interval, cfg.context_output_size)
+                dxy = _clean_optional_macro(
+                    quality,
+                    market.safe_candles(cfg.dxy_symbol, cfg.macro_interval, cfg.context_output_size),
+                    cfg.macro_interval,
+                    now,
+                )
+                yields = _clean_optional_macro(
+                    quality,
+                    market.safe_candles(cfg.yield_symbol, cfg.macro_interval, cfg.context_output_size),
+                    cfg.macro_interval,
+                    now,
+                )
 
-            signal = boss.decide(cfg.symbol, frames, dxy=dxy, yield_df=yields)
+            live_price = market.safe_price(cfg.symbol)
+            if live_price is None:
+                log.info("Market-quality veto: no fresh executable reference price")
+                cycle += 1
+                time.sleep(cfg.poll_seconds)
+                continue
+
+            signal = boss.decide(
+                cfg.symbol,
+                frames,
+                dxy=dxy,
+                yield_df=yields,
+                entry_price=live_price,
+            )
             if signal:
                 raw_confidence = float(signal.confidence)
                 calibration = outcomes.calibrate(
@@ -160,41 +252,41 @@ def run() -> None:
                         calibration.samples,
                     )
                 else:
-                    setup_key = OutcomeCalibrationAgent.utc_iso(signal_setup_at)
-                    fingerprint = (
-                        setup_key,
-                        signal.direction.value,
-                        signal.selected_strategy,
-                        round(signal.entry, 1),
-                        round(signal.stop_loss, 1),
-                        round(signal.take_profit, 1),
-                    )
-                    already_recorded = outcomes.exists(signal, signal_setup_at)
-                    if already_recorded:
-                        log.info("Duplicate signal suppressed by persistent outcome ledger")
-                    elif fingerprint != last_fingerprint:
-                        emitted_at = datetime.now(timezone.utc)
-                        day_start, day_end = frequency.day_bounds_utc(emitted_at)
-                        trades_today = outcomes.count_emitted_between(day_start, day_end)
-                        frequency_decision = frequency.evaluate(emitted_at, trades_today)
+                    emitted_at = datetime.now(timezone.utc)
+                    day_start, day_end = frequency.day_bounds_utc(emitted_at)
+                    trades_today = outcomes.count_emitted_between(day_start, day_end)
+                    frequency_decision = frequency.evaluate(emitted_at, trades_today)
 
-                        if not frequency_decision.allowed:
-                            log.info(
-                                "Frequency veto: %s date=%s trades_today=%s max=%s timezone=%s",
-                                frequency_decision.reason,
-                                frequency_decision.local_date,
-                                frequency_decision.trades_today,
-                                cfg.max_trades_per_day,
-                                cfg.trade_timezone,
-                            )
+                    if not frequency_decision.allowed:
+                        log.info(
+                            "Frequency veto: %s date=%s trades_today=%s max=%s timezone=%s",
+                            frequency_decision.reason,
+                            frequency_decision.local_date,
+                            frequency_decision.trades_today,
+                            cfg.max_trades_per_day,
+                            cfg.trade_timezone,
+                        )
+                    else:
+                        signal.strategy_stats.update(
+                            {
+                                "trades_today_before_signal": frequency_decision.trades_today,
+                                "daily_trade_cap": cfg.max_trades_per_day,
+                                "trade_timezone": cfg.trade_timezone,
+                            }
+                        )
+                        reservation = outcomes.reserve_if_under_cap(
+                            signal,
+                            emitted_at,
+                            selection_confidence=raw_confidence,
+                            setup_at=signal_setup_at,
+                            day_start=day_start,
+                            day_end=day_end,
+                            max_per_day=cfg.max_trades_per_day,
+                        )
+                        if not reservation.reserved:
+                            log.info("Signal reservation veto: %s", reservation.reason)
                         else:
-                            signal.strategy_stats.update(
-                                {
-                                    "trades_today_before_signal": frequency_decision.trades_today,
-                                    "daily_trade_cap": cfg.max_trades_per_day,
-                                    "trade_timezone": cfg.trade_timezone,
-                                }
-                            )
+                            signal.strategy_stats["trades_today_before_signal"] = reservation.trades_today
                             log.info(
                                 "Signal %s using %s raw_confidence %.1f%% calibrated_confidence %.1f%% samples=%s daily_slot=%s/%s",
                                 signal.direction.value,
@@ -202,23 +294,33 @@ def run() -> None:
                                 raw_confidence * 100,
                                 signal.confidence * 100,
                                 calibration.samples,
-                                frequency_decision.trades_today + 1,
+                                reservation.trades_today + 1,
                                 cfg.max_trades_per_day,
                             )
                             if cfg.paper_mode:
                                 log.info("PAPER_MODE: %s", telegram.format_signal(signal).replace("\n", " | "))
+                                outcomes.mark_delivery_state(signal, signal_setup_at, "SENT", "paper")
                             else:
-                                telegram.send(signal)
-                            outcomes.record(
-                                signal,
-                                emitted_at,
-                                selection_confidence=raw_confidence,
-                                setup_at=signal_setup_at,
-                            )
-                            last_fingerprint = fingerprint
+                                try:
+                                    message_id = telegram.send(signal)
+                                except Exception:
+                                    # The external delivery result can be unknown on
+                                    # timeout/crash. Keep the reservation to prevent
+                                    # a duplicate send or daily-slot reuse.
+                                    outcomes.mark_delivery_state(signal, signal_setup_at, "UNKNOWN")
+                                    raise
+                                else:
+                                    outcomes.mark_delivery_state(
+                                        signal,
+                                        signal_setup_at,
+                                        "SENT",
+                                        message_id,
+                                    )
             else:
                 log.info("No strategy passed research + market-context + risk thresholds")
         except Exception:
+            # A failed research refresh leaves last_research_success unchanged, so
+            # the next cycle retries immediately rather than waiting a full period.
             log.exception("Cycle failed")
         cycle += 1
         time.sleep(cfg.poll_seconds)
