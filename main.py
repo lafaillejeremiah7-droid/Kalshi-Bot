@@ -13,7 +13,7 @@ from xau_company.frequency import TradeFrequencyGuard
 from xau_company.orchestrator import BossAgent
 from xau_company.outcomes import OutcomeCalibrationAgent
 from xau_company.quality import MarketDataQualityAgent
-from xau_company.telegram import TelegramNotifier
+from xau_company.telegram import TelegramNotifier, TelegramRejectedError
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("xau-company")
@@ -285,6 +285,19 @@ def run() -> None:
                     )
                 else:
                     emitted_at = datetime.now(timezone.utc)
+                    # Research holding horizons start at the completed setup-candle
+                    # boundary, not when Telegram happens to be sent. Reduce the
+                    # remaining forward window by decision latency so outcome
+                    # calibration uses the same lifecycle horizon as research.
+                    original_holding = int(signal.strategy_stats.get("max_holding_minutes", 1))
+                    emitted_delay_minutes = max(
+                        0.0,
+                        (pd.Timestamp(emitted_at) - setup_end).total_seconds() / 60.0,
+                    )
+                    remaining_holding = max(1, int(original_holding - emitted_delay_minutes))
+                    signal.strategy_stats["max_holding_minutes_research"] = original_holding
+                    signal.strategy_stats["max_holding_minutes"] = remaining_holding
+
                     day_start, day_end = frequency.day_bounds_utc(emitted_at)
                     trades_today = outcomes.count_emitted_between(day_start, day_end)
                     frequency_decision = frequency.evaluate(emitted_at, trades_today)
@@ -335,7 +348,16 @@ def run() -> None:
                             else:
                                 try:
                                     message_id = telegram.send(signal)
+                                except TelegramRejectedError:
+                                    # A definitive Telegram rejection did not send
+                                    # anything externally, so release the reservation
+                                    # and allow a corrected configuration to retry.
+                                    outcomes.mark_delivery_state(signal, signal_setup_at, "FAILED")
+                                    raise
                                 except Exception:
+                                    # Network/5xx/accepted-without-id failures can be
+                                    # delivery-ambiguous. Keep the slot and suppress
+                                    # duplicates rather than risk sending twice.
                                     outcomes.mark_delivery_state(signal, signal_setup_at, "UNKNOWN")
                                     raise
                                 else:
