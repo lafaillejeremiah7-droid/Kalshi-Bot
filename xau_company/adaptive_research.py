@@ -68,6 +68,9 @@ class AdaptiveStrategyResearchAgent(StrategyResearchAgent):
         self.last_invented_variants = 0
         self.last_invention_promoted = 0
         self.last_invention_quarantined = 0
+        self.last_seed_audited = 0
+        self.last_seed_overfit_rejected = 0
+        self.last_seed_live_eligible = 0
         self.last_lifetime_trials = self.evolution.tested_trials_lifetime()
         self.dynamic_library_size = self.evolution.size()
         self.invention_library_size = self.invention.size()
@@ -113,8 +116,16 @@ class AdaptiveStrategyResearchAgent(StrategyResearchAgent):
 
         left = Candidate(str(family_a), tuple(params_a))
         right = Candidate(str(family_b), tuple(params_b))
-        a = self.invention.signal(df, left.params, cache) if left.family == "invented" else super()._signal(df, left, cache)
-        b = self.invention.signal(df, right.params, cache) if right.family == "invented" else super()._signal(df, right, cache)
+        a = (
+            self.invention.signal(df, left.params, cache)
+            if left.family == "invented"
+            else super()._signal(df, left, cache)
+        )
+        b = (
+            self.invention.signal(df, right.params, cache)
+            if right.family == "invented"
+            else super()._signal(df, right, cache)
+        )
         out = pd.Series(0, index=df.index, dtype="int8")
 
         if mode == "confirm":
@@ -128,21 +139,43 @@ class AdaptiveStrategyResearchAgent(StrategyResearchAgent):
             out[((a == -1) & (b != 1)) | ((b == -1) & (a != 1))] = -1
         return out
 
-    def _refresh_live_catalog(self, research_catalog: list[CandidateScore]) -> None:
+    def _refresh_live_catalog(
+        self,
+        research_catalog: list[CandidateScore],
+        seed_tested_trials: int,
+    ) -> None:
+        """Build live catalog only from strategies that passed their overfit gate."""
         evolved_promoted = self.evolution.promoted_keys() if self.enable_evolution else set()
         invented_promoted = self.invention.promoted_keys() if self.enable_invention else set()
         eligible: list[CandidateScore] = []
+        seed_audited = 0
+        seed_rejected = 0
+        seed_eligible = 0
 
         for result in research_catalog:
             family = result.candidate.family
             key = StrategyEvolutionAgent.spec_key(family, result.candidate.params)
             if family in self.HORIZONS:
-                eligible.append(result)
+                seed_audited += 1
+                audit = self.overfit_auditor.audit(
+                    result,
+                    tested_trials=max(1, int(seed_tested_trials)),
+                )
+                if audit.passed:
+                    eligible.append(result)
+                    seed_eligible += 1
+                else:
+                    # Base variants are regenerated each research cycle, so their
+                    # quarantine is fail-closed exclusion from the live catalog.
+                    seed_rejected += 1
             elif family == "ensemble" and key in evolved_promoted:
                 eligible.append(result)
             elif family == "invented" and key in invented_promoted:
                 eligible.append(result)
 
+        self.last_seed_audited = seed_audited
+        self.last_seed_overfit_rejected = seed_rejected
+        self.last_seed_live_eligible = seed_eligible
         self.catalog = self._build_catalog(eligible)
         self.top = self.catalog[:25]
 
@@ -155,10 +188,28 @@ class AdaptiveStrategyResearchAgent(StrategyResearchAgent):
         }
 
     def run(self, df: pd.DataFrame) -> list[CandidateScore]:
-        super().run(df)
-        research_catalog = list(self.catalog)
-        self.last_experimental_catalog_size = sum(result.candidate.family == "ensemble" for result in research_catalog)
-        self.last_invented_catalog_size = sum(result.candidate.family == "invented" for result in research_catalog)
+        # Keep the complete evaluated score set for the explicit overfit pass.
+        # The previous implementation called StrategyResearchAgent.run(), which
+        # truncated to the staging catalog before the Overfit Auditor saw seeds.
+        selected = self._balanced_candidates()
+        self.last_evaluated = len(selected)
+        cache: dict[tuple, pd.Series | tuple[pd.Series, pd.Series]] = {}
+        regimes = self._historical_regimes(df, cache)
+
+        research_catalog: list[CandidateScore] = []
+        for candidate in selected:
+            result = self._evaluate(df, candidate, cache, regimes)
+            if result is not None:
+                research_catalog.append(result)
+        research_catalog.sort(key=lambda x: x.score, reverse=True)
+
+        self.last_experimental_catalog_size = sum(
+            result.candidate.family == "ensemble" for result in research_catalog
+        )
+        self.last_invented_catalog_size = sum(
+            result.candidate.family == "invented" for result in research_catalog
+        )
+        seed_trials = max(1, self.last_evaluated)
 
         if not self.enable_evolution and not self.enable_invention:
             self.last_discovered = self.last_promoted = self.last_quarantined = 0
@@ -168,9 +219,7 @@ class AdaptiveStrategyResearchAgent(StrategyResearchAgent):
             self.invention_library_size = self.invention.size()
             self.invention_family_count = self.invention.family_count()
             self.invention_promoted_family_count = self.invention.promoted_family_count()
-            seed_only = [r for r in research_catalog if r.candidate.family in self.HORIZONS]
-            self.catalog = self._build_catalog(seed_only)
-            self.top = self.catalog[:25]
+            self._refresh_live_catalog(research_catalog, seed_tested_trials=seed_trials)
             return self.top
 
         # One global lifetime trial ledger feeds both dynamic sources so adding
@@ -179,20 +228,25 @@ class AdaptiveStrategyResearchAgent(StrategyResearchAgent):
 
         if self.enable_evolution:
             self.last_promoted, self.last_quarantined = self.evolution.audit_promotions(
-                research_catalog, self.overfit_auditor, tested_trials=max(1, self.last_lifetime_trials)
+                research_catalog,
+                self.overfit_auditor,
+                tested_trials=max(1, self.last_lifetime_trials),
             )
         else:
             self.last_promoted = self.last_quarantined = 0
 
         if self.enable_invention:
             self.last_invention_promoted, self.last_invention_quarantined = self.invention.audit_promotions(
-                research_catalog, self.overfit_auditor, tested_trials=max(1, self.last_lifetime_trials)
+                research_catalog,
+                self.overfit_auditor,
+                tested_trials=max(1, self.last_lifetime_trials),
             )
         else:
             self.last_invention_promoted = self.last_invention_quarantined = 0
 
-        # Only seed strategies and explicitly promoted dynamic variants may reach Selector.
-        self._refresh_live_catalog(research_catalog)
+        # Every live strategy now has an explicit gate: seed variants pass the
+        # seed audit above; dynamic variants must also be persistently PROMOTED.
+        self._refresh_live_catalog(research_catalog, seed_tested_trials=seed_trials)
 
         self.last_discovered = self.evolution.propose(self.catalog) if self.enable_evolution else 0
         if self.enable_invention:
