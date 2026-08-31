@@ -147,13 +147,17 @@ class SessionAgent:
     name = "Session Desk"
 
     def vote(self, df: pd.DataFrame, regime: str, lab: StrategyResearchAgent) -> AgentVote:
-        ts = df.datetime.iloc[-1]
+        ts = pd.Timestamp(df.datetime.iloc[-1])
+        if ts.tzinfo is None:
+            ts = ts.tz_localize("UTC")
+        else:
+            ts = ts.tz_convert("UTC")
         hour = int(ts.hour)
         liquid = 7 <= hour <= 17
         return AgentVote(
             self.name,
             Direction.HOLD,
-            0.60 if liquid else 0.48,
-            "Major London/NY liquidity window" if liquid else "Lower-liquidity time window",
-            {"liquidity_ok": liquid},
+            0.78 if liquid else 0.95,
+            "Major London/NY liquidity window" if liquid else "Outside approved liquidity window; veto new trade",
+            {"liquidity_ok": liquid, "veto": not liquid},
         )
