@@ -116,7 +116,6 @@ class StrategyEvolutionAgent:
         tmp.replace(path)
 
     def increment_tested_trials(self, trials: int) -> int:
-        """Persist cumulative search effort so multiplicity pressure grows over time."""
         add = max(0, int(trials))
         with self._exclusive_lock():
             meta = self._read_meta_unlocked()
@@ -131,9 +130,6 @@ class StrategyEvolutionAgent:
             return max(0, int(self._read_meta_unlocked().get("tested_trials_lifetime", 0)))
 
     def _bounded_rows(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        # PROMOTED and QUARANTINED entries are durable research history. The size
-        # limit applies to disposable experiments; protected entries are never
-        # silently evicted merely because the experimental queue is full.
         protected = [row for row in rows if row.get("status") in {"PROMOTED", "QUARANTINED"}]
         experiments = [row for row in rows if row.get("status") not in {"PROMOTED", "QUARANTINED"}]
         remaining = max(0, self.max_library_size - len(protected))
@@ -187,7 +183,7 @@ class StrategyEvolutionAgent:
         }
 
     def propose(self, scores: Iterable[Any]) -> int:
-        """Continuously rotate experiments without ever evicting protected history."""
+        """Continuously rotate experiments without evicting protected history."""
         if self.discoveries_per_cycle <= 0:
             return 0
 
@@ -200,18 +196,10 @@ class StrategyEvolutionAgent:
                 return 0
 
             limit = min(self.discoveries_per_cycle, experiment_capacity)
-            # Preserve the keys of entries rotated out during this cycle so they
-            # are not immediately regenerated from the same parent pair.
-            prior_keys = {
+            existing = {
                 self.spec_key(str(row.get("family", "")), row.get("params", []))
                 for row in rows
             }
-            slots_needed = max(0, limit - max(0, experiment_capacity - len(experiments)))
-            if slots_needed:
-                experiments = experiments[min(slots_needed, len(experiments)) :]
-            rows = protected + experiments
-            existing = set(prior_keys)
-
             parents = []
             seen_parents: set[str] = set()
             for score in scores:
@@ -226,7 +214,7 @@ class StrategyEvolutionAgent:
                 if len(parents) >= 120:
                     break
 
-            added = 0
+            proposed: list[dict[str, Any]] = []
             now = datetime.now(timezone.utc).isoformat()
             for i, left in enumerate(parents):
                 for right in parents[i + 1 :]:
@@ -252,7 +240,7 @@ class StrategyEvolutionAgent:
                         if key in existing:
                             continue
                         existing.add(key)
-                        rows.append(
+                        proposed.append(
                             {
                                 "family": "ensemble",
                                 "params": self._jsonable(params),
@@ -262,12 +250,24 @@ class StrategyEvolutionAgent:
                                 "parents": [self._parent_payload(left), self._parent_payload(right)],
                             }
                         )
-                        added += 1
-                        if added >= limit:
-                            self._write_unlocked(rows)
-                            return added
-            self._write_unlocked(rows)
-            return added
+                        if len(proposed) >= limit:
+                            break
+                    if len(proposed) >= limit:
+                        break
+                if len(proposed) >= limit:
+                    break
+
+            if not proposed:
+                return 0
+
+            # Evict exactly as many oldest unpromoted experiments as needed for
+            # the concrete novel proposals already generated. Never shrink the
+            # queue merely because fewer ideas were available this cycle.
+            overflow = max(0, len(experiments) + len(proposed) - experiment_capacity)
+            if overflow:
+                experiments = experiments[min(overflow, len(experiments)) :]
+            self._write_unlocked(protected + experiments + proposed)
+            return len(proposed)
 
     def audit_promotions(
         self,
@@ -275,7 +275,7 @@ class StrategyEvolutionAgent:
         auditor: OverfitAuditor,
         tested_trials: int,
     ) -> tuple[int, int]:
-        """Promote only audited entries and quarantine degraded promotions."""
+        """Promote only audited entries and keep degraded promotions quarantined."""
         with self._exclusive_lock():
             rows = self._read_unlocked()
             if not rows:
@@ -299,9 +299,13 @@ class StrategyEvolutionAgent:
 
                 audit = auditor.audit(result, tested_trials)
                 previous = str(row.get("status", "EXPERIMENTAL"))
-                next_status = "PROMOTED" if audit.passed else (
-                    "QUARANTINED" if previous == "PROMOTED" else "EXPERIMENTAL"
-                )
+                if audit.passed:
+                    next_status = "PROMOTED"
+                elif previous in {"PROMOTED", "QUARANTINED"}:
+                    next_status = "QUARANTINED"
+                else:
+                    next_status = "EXPERIMENTAL"
+
                 if next_status == "PROMOTED" and previous != "PROMOTED":
                     newly_promoted += 1
                 if next_status == "QUARANTINED" and previous == "PROMOTED":
