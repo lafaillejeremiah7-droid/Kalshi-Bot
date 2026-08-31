@@ -66,6 +66,7 @@ class OutcomeCalibrationAgent:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     signal_key TEXT NOT NULL UNIQUE,
                     observed_at TEXT NOT NULL,
+                    setup_at TEXT NOT NULL DEFAULT '',
                     symbol TEXT NOT NULL,
                     direction TEXT NOT NULL,
                     entry REAL NOT NULL,
@@ -86,6 +87,7 @@ class OutcomeCalibrationAgent:
                 )
                 """
             )
+            self._ensure_column(conn, "setup_at", "setup_at TEXT NOT NULL DEFAULT ''")
             self._ensure_column(conn, "delivery_state", "delivery_state TEXT NOT NULL DEFAULT 'SENT'")
             self._ensure_column(conn, "max_holding_minutes", "max_holding_minutes INTEGER NOT NULL DEFAULT 4320")
             self._ensure_column(conn, "resolution_interval_minutes", "resolution_interval_minutes INTEGER NOT NULL DEFAULT 1")
@@ -100,6 +102,7 @@ class OutcomeCalibrationAgent:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_signal_outcomes_confidence ON signal_outcomes(selection_confidence)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_signal_outcomes_context ON signal_outcomes(strategy_family, regime, status)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_signal_outcomes_observed_at ON signal_outcomes(observed_at)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_signal_outcomes_setup ON signal_outcomes(symbol, setup_at)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_signal_outcomes_delivery ON signal_outcomes(delivery_state)")
 
     @staticmethod
@@ -117,11 +120,10 @@ class OutcomeCalibrationAgent:
 
     @staticmethod
     def _signal_key(signal: TradeSignal, setup_at: str) -> str:
-        # Identity represents one strategy/direction decision on one completed
-        # setup candle. Entry/SL/TP can refresh without creating a second setup.
-        raw = "|".join(
-            [setup_at, signal.symbol, signal.direction.value, signal.selected_strategy]
-        )
+        # One company authorization per symbol per completed research setup candle.
+        # A different winning strategy, direction, quote, SL or TP during the same
+        # setup candle does not create a second authorization opportunity.
+        raw = "|".join([setup_at, signal.symbol])
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
     def _runtime_limits(self, signal: TradeSignal) -> tuple[int, int]:
@@ -135,8 +137,13 @@ class OutcomeCalibrationAgent:
         key = self._signal_key(signal, setup)
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT 1 FROM signal_outcomes WHERE signal_key=? AND delivery_state!='FAILED' LIMIT 1",
-                (key,),
+                """
+                SELECT 1 FROM signal_outcomes
+                WHERE (signal_key=? OR (symbol=? AND setup_at=?))
+                  AND delivery_state!='FAILED'
+                LIMIT 1
+                """,
+                (key, signal.symbol, setup),
             ).fetchone()
         return row is not None
 
@@ -183,13 +190,18 @@ class OutcomeCalibrationAgent:
             conn.isolation_level = None
             conn.execute("BEGIN IMMEDIATE")
             duplicate = conn.execute(
-                "SELECT delivery_state FROM signal_outcomes WHERE signal_key=? LIMIT 1", (key,)
+                """
+                SELECT id, delivery_state FROM signal_outcomes
+                WHERE signal_key=? OR (symbol=? AND setup_at=?)
+                LIMIT 1
+                """,
+                (key, signal.symbol, setup),
             ).fetchone()
             if duplicate is not None and duplicate["delivery_state"] != "FAILED":
                 conn.execute("ROLLBACK")
-                return ReservationResult(False, "duplicate setup", 0)
+                return ReservationResult(False, "duplicate research-candle setup", 0)
             if duplicate is not None:
-                conn.execute("DELETE FROM signal_outcomes WHERE signal_key=?", (key,))
+                conn.execute("DELETE FROM signal_outcomes WHERE id=?", (int(duplicate["id"]),))
 
             row = conn.execute(
                 """
@@ -207,15 +219,16 @@ class OutcomeCalibrationAgent:
             conn.execute(
                 """
                 INSERT INTO signal_outcomes (
-                    signal_key, observed_at, symbol, direction, entry, stop_loss,
+                    signal_key, observed_at, setup_at, symbol, direction, entry, stop_loss,
                     take_profit, selection_confidence, calibrated_confidence,
                     strategy, strategy_family, regime, status, delivery_state,
                     max_holding_minutes, resolution_interval_minutes
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', 'RESERVED', ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', 'RESERVED', ?, ?)
                 """,
                 (
                     key,
                     observed,
+                    setup,
                     signal.symbol,
                     signal.direction.value,
                     float(signal.entry),
@@ -251,11 +264,21 @@ class OutcomeCalibrationAgent:
         allowed = {"RESERVED", "SENT", "UNKNOWN", "FAILED"}
         if state not in allowed:
             raise ValueError(f"Unknown delivery state: {state}")
-        key = self._signal_key(signal, self.utc_iso(setup_at))
+        setup = self.utc_iso(setup_at)
+        key = self._signal_key(signal, setup)
         with self._connect() as conn:
             conn.execute(
-                "UPDATE signal_outcomes SET delivery_state=?, telegram_message_id=? WHERE signal_key=?",
-                (state, None if telegram_message_id is None else str(telegram_message_id), key),
+                """
+                UPDATE signal_outcomes SET delivery_state=?, telegram_message_id=?
+                WHERE signal_key=? OR (symbol=? AND setup_at=?)
+                """,
+                (
+                    state,
+                    None if telegram_message_id is None else str(telegram_message_id),
+                    key,
+                    signal.symbol,
+                    setup,
+                ),
             )
 
     def record(
@@ -273,18 +296,30 @@ class OutcomeCalibrationAgent:
         key = self._signal_key(signal, setup)
         holding, resolution = self._runtime_limits(signal)
         with self._connect() as conn:
+            duplicate = conn.execute(
+                """
+                SELECT 1 FROM signal_outcomes
+                WHERE (signal_key=? OR (symbol=? AND setup_at=?))
+                  AND delivery_state!='FAILED'
+                LIMIT 1
+                """,
+                (key, signal.symbol, setup),
+            ).fetchone()
+            if duplicate is not None:
+                return False
             cursor = conn.execute(
                 """
                 INSERT OR IGNORE INTO signal_outcomes (
-                    signal_key, observed_at, symbol, direction, entry, stop_loss,
+                    signal_key, observed_at, setup_at, symbol, direction, entry, stop_loss,
                     take_profit, selection_confidence, calibrated_confidence,
                     strategy, strategy_family, regime, status, delivery_state,
                     max_holding_minutes, resolution_interval_minutes
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', 'SENT', ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', 'SENT', ?, ?)
                 """,
                 (
                     key,
                     observed,
+                    setup,
                     signal.symbol,
                     signal.direction.value,
                     float(signal.entry),
@@ -349,7 +384,7 @@ class OutcomeCalibrationAgent:
                 expiry = observed + pd.Timedelta(minutes=holding_minutes)
                 relevant = candles[
                     (candles["datetime"] + delta > observed)
-                    & (candles["datetime"] <= expiry)
+                    & (candles["datetime"] < expiry)
                 ]
                 resolved_status: str | None = None
                 resolved_at: str | None = None
@@ -369,8 +404,6 @@ class OutcomeCalibrationAgent:
 
                     overlaps_emission = candle_start < observed < candle_end
                     if overlaps_emission and (stop_hit or target_hit):
-                        # OHLC cannot tell whether the hit happened before or after
-                        # the actual send inside this candle. Exclude it from calibration.
                         resolved_status = "AMBIGUOUS"
                         resolved_at = self.utc_iso(candle_start)
                         counts["ambiguous"] += 1
