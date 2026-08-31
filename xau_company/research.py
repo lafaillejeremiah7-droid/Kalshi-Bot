@@ -7,6 +7,7 @@ from typing import Callable, Iterable
 import numpy as np
 import pandas as pd
 
+from .backtest import TradeLifecycleBacktester, TradeOutcome
 from .indicators import atr, donchian, ema, roc, rsi, rolling_zscore
 from .models import Direction
 
@@ -31,15 +32,14 @@ class CandidateScore:
     folds: int = 0
     regime_scores: dict[str, float] = field(default_factory=dict)
     regime_trades: dict[str, int] = field(default_factory=dict)
+    avg_r_multiple: float = 0.0
+    max_drawdown_r: float = 0.0
+    max_loss_streak: int = 0
+    backtest_model: str = "next_bar_atr"
 
 
 class StrategyResearchAgent:
-    """Research tens of thousands of strategy variants with walk-forward validation.
-
-    The lab builds a broad strategy universe, spreads the configured research budget
-    across families/parameter ranges, evaluates each candidate on expanding
-    walk-forward folds, and records out-of-sample performance by market regime.
-    """
+    """Research tens of thousands of strategy variants with realistic walk-forward validation."""
 
     HORIZONS = {
         "trend": 6,
@@ -62,12 +62,21 @@ class StrategyResearchAgent:
         walk_forward_folds: int = 4,
         catalog_size: int = 600,
         min_walk_forward_folds: int = 2,
+        slippage_bps: float = 0.5,
+        backtest_stop_atr: float = 1.20,
+        backtest_reward_risk: float = 1.70,
     ) -> None:
         self.max_candidates = max_candidates
         self.spread_bps = spread_bps
         self.walk_forward_folds = max(2, int(walk_forward_folds))
         self.catalog_size = max(50, int(catalog_size))
         self.min_walk_forward_folds = max(2, int(min_walk_forward_folds))
+        self.backtester = TradeLifecycleBacktester(
+            spread_bps=spread_bps,
+            slippage_bps=slippage_bps,
+            stop_atr=backtest_stop_atr,
+            reward_risk=backtest_reward_risk,
+        )
         self.family_quality: dict[str, float] = {}
         self.top: list[CandidateScore] = []
         self.catalog: list[CandidateScore] = []
@@ -307,11 +316,7 @@ class StrategyResearchAgent:
 
         elif candidate.family == "volatility_breakout":
             lookback, atr_period, atr_mult, trend_span = p
-            center = self._cached(
-                cache,
-                ("center", lookback),
-                lambda: close.rolling(lookback).mean().shift(1),
-            )
+            center = self._cached(cache, ("center", lookback), lambda: close.rolling(lookback).mean().shift(1))
             a = catr(atr_period)
             trend = cema(trend_span)
             out[(close > center + a * atr_mult) & (close > trend)] = 1
@@ -342,7 +347,6 @@ class StrategyResearchAgent:
         return out
 
     def current_direction(self, df: pd.DataFrame, candidate: Candidate) -> Direction:
-        """Return a strategy's direction on the newest completed candle."""
         signal = self._signal(df, candidate, cache={})
         if signal.empty:
             return Direction.HOLD
@@ -392,12 +396,8 @@ class StrategyResearchAgent:
         return folds
 
     @staticmethod
-    def _profit_factor(returns: np.ndarray) -> float:
-        positive = float(returns[returns > 0].sum())
-        negative = float(-returns[returns < 0].sum())
-        if negative <= 1e-12:
-            return 4.0 if positive > 0 else 1.0
-        return float(np.clip(positive / negative, 0.0, 4.0))
+    def _hit_rate(trades: list[TradeOutcome]) -> float:
+        return float(np.mean([trade.won for trade in trades])) if trades else 0.0
 
     def _evaluate(
         self,
@@ -407,103 +407,106 @@ class StrategyResearchAgent:
         regimes: pd.Series,
     ) -> CandidateScore | None:
         signal = self._signal(df, candidate, cache)
-        horizon = self.HORIZONS.get(candidate.family, 4)
-        future = df["close"].shift(-horizon) / df["close"] - 1
-        cost = self.spread_bps / 10_000
-        signed = signal * future - (signal != 0).astype(float) * cost
-
-        signal_np = signal.to_numpy()
-        future_np = future.to_numpy(dtype=float)
-        signed_np = signed.to_numpy(dtype=float)
-        active = (signal_np != 0) & np.isfinite(future_np) & np.isfinite(signed_np)
-        if int(active.sum()) < 30:
+        atr_values = self._cached(cache, ("atr", 14), lambda: atr(df, 14))
+        trades = self.backtester.simulate(
+            df,
+            signal,
+            atr_values,
+            max_holding=self.HORIZONS.get(candidate.family, 4),
+        )
+        if len(trades) < 20:
             return None
 
         folds = self._walk_forward_slices(len(df))
         if not folds:
             return None
 
-        train_wins = 0
-        train_total = 0
-        valid_wins = 0
-        valid_total = 0
+        train_fold_hits: list[float] = []
         fold_hits: list[float] = []
-        oos_mask = np.zeros(len(df), dtype=bool)
-        positions = np.arange(len(df))
+        oos_by_signal: dict[int, TradeOutcome] = {}
 
         for train_end, valid_start, valid_end in folds:
-            train_mask = active & (positions < train_end)
-            valid_mask = active & (positions >= valid_start) & (positions < valid_end)
-            train_n = int(train_mask.sum())
-            valid_n = int(valid_mask.sum())
-            if train_n < 12 or valid_n < 4:
+            # Any trade crossing a fold boundary is excluded from that fold. This
+            # prevents validation results from leaking into the training period.
+            train_trades = [t for t in trades if t.exit_index < train_end]
+            valid_trades = [
+                t for t in trades
+                if t.signal_index >= valid_start and t.entry_index >= valid_start and t.exit_index < valid_end
+            ]
+            if len(train_trades) < 10 or len(valid_trades) < 3:
                 continue
 
-            train_returns = signed_np[train_mask]
-            valid_returns = signed_np[valid_mask]
-            train_wins += int((train_returns > 0).sum())
-            train_total += train_n
-            valid_wins += int((valid_returns > 0).sum())
-            valid_total += valid_n
-            fold_hits.append(float((valid_returns > 0).mean()))
-            oos_mask |= valid_mask
+            train_fold_hits.append(self._hit_rate(train_trades))
+            fold_hits.append(self._hit_rate(valid_trades))
+            for trade in valid_trades:
+                oos_by_signal[trade.signal_index] = trade
 
-        if len(fold_hits) < self.min_walk_forward_folds or valid_total < 12 or train_total == 0:
+        oos_trades = sorted(oos_by_signal.values(), key=lambda t: t.signal_index)
+        if len(fold_hits) < self.min_walk_forward_folds or len(oos_trades) < 10 or not train_fold_hits:
             return None
 
-        train_hit = train_wins / train_total
-        valid_hit = valid_wins / valid_total
+        train_hit = float(np.mean(train_fold_hits))
+        valid_hit = self._hit_rate(oos_trades)
         wf_std = float(np.std(fold_hits))
-        oos_returns = signed_np[oos_mask]
-        expectancy = float(np.mean(oos_returns)) if len(oos_returns) else 0.0
-        pf = self._profit_factor(oos_returns)
+        net_returns = np.asarray([t.net_return for t in oos_trades], dtype=float)
+        r_values = np.asarray([t.r_multiple for t in oos_trades], dtype=float)
+        expectancy = float(np.mean(net_returns))
+        avg_r = float(np.mean(r_values))
+        pf = self.backtester.profit_factor(oos_trades)
+        max_dd_r = self.backtester.max_drawdown_r(oos_trades)
+        max_loss_streak = self.backtester.max_loss_streak(oos_trades)
 
-        baseline_move = float(np.nanmedian(np.abs(future_np)))
-        exp_scale = max(baseline_move, cost, 1e-6)
-        expectancy_score = float(np.clip(0.5 + 0.5 * np.tanh(expectancy / exp_scale), 0.0, 1.0))
+        expectancy_score = float(np.clip(0.5 + 0.5 * np.tanh(avg_r / 0.50), 0.0, 1.0))
         pf_score = pf / (1.0 + pf)
-        sample_bonus = float(np.clip(np.log1p(valid_total) / np.log(301), 0.0, 1.0))
+        sample_bonus = float(np.clip(np.log1p(len(oos_trades)) / np.log(201), 0.0, 1.0))
         stability_gap = abs(train_hit - valid_hit)
         stability_score = float(np.clip(1.0 - stability_gap - wf_std * 1.5, 0.0, 1.0))
         fold_coverage = len(fold_hits) / max(1, self.walk_forward_folds)
+        drawdown_score = float(np.exp(-max_dd_r / 8.0))
+        loss_streak_score = float(np.exp(-max_loss_streak / 8.0))
 
         regime_np = regimes.to_numpy(dtype=object)
         regime_scores: dict[str, float] = {}
         regime_trades: dict[str, int] = {}
         for regime in ("trend_up", "trend_down", "range", "volatile"):
-            mask = oos_mask & (regime_np == regime)
-            n = int(mask.sum())
+            subset = [t for t in oos_trades if regime_np[t.signal_index] == regime]
+            n = len(subset)
             if n == 0:
                 continue
-            wins = int((signed_np[mask] > 0).sum())
+            wins = sum(t.won for t in subset)
             regime_scores[regime] = float((wins + 5) / (n + 10))
             regime_trades[regime] = n
 
-        regime_diversity = sum(n >= 5 for n in regime_trades.values()) / 4.0
+        regime_diversity = sum(n >= 4 for n in regime_trades.values()) / 4.0
         score = (
-            valid_hit * 0.34
-            + train_hit * 0.06
-            + sample_bonus * 0.13
-            + pf_score * 0.12
-            + expectancy_score * 0.12
-            + fold_coverage * 0.09
+            valid_hit * 0.25
+            + train_hit * 0.04
+            + sample_bonus * 0.10
+            + pf_score * 0.11
+            + expectancy_score * 0.14
+            + drawdown_score * 0.10
+            + fold_coverage * 0.08
             + stability_score * 0.10
             + regime_diversity * 0.04
+            + loss_streak_score * 0.04
         )
 
         return CandidateScore(
             candidate=candidate,
-            train_hit_rate=float(train_hit),
-            valid_hit_rate=float(valid_hit),
-            trades=int(active.sum()),
+            train_hit_rate=train_hit,
+            valid_hit_rate=valid_hit,
+            trades=len(trades),
             score=float(np.clip(score, 0.0, 1.0)),
-            walk_forward_hit_rate=float(valid_hit),
+            walk_forward_hit_rate=valid_hit,
             walk_forward_std=wf_std,
             expectancy=expectancy,
             profit_factor=pf,
             folds=len(fold_hits),
             regime_scores=regime_scores,
             regime_trades=regime_trades,
+            avg_r_multiple=avg_r,
+            max_drawdown_r=max_dd_r,
+            max_loss_streak=max_loss_streak,
         )
 
     def _build_catalog(self, scores: list[CandidateScore]) -> list[CandidateScore]:
