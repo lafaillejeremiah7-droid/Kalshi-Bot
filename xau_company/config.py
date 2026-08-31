@@ -57,6 +57,7 @@ class Settings:
     trade_timezone: str = os.getenv("TRADE_TIMEZONE", "America/Chicago")
     max_trades_per_day: int = int(os.getenv("MAX_TRADES_PER_DAY", "2"))
     max_stale_multiplier: float = float(os.getenv("MAX_STALE_MULTIPLIER", "4.0"))
+    max_signal_delay_minutes: int = int(os.getenv("MAX_SIGNAL_DELAY_MINUTES", "5"))
     paper_mode: bool = _bool("PAPER_MODE", True)
     dxy_symbol: str = os.getenv("DXY_SYMBOL", "DXY")
     yield_symbol: str = os.getenv("YIELD_SYMBOL", "US10Y")
@@ -118,8 +119,8 @@ class Settings:
             raise ValueError("BACKTEST_STOP_ATR must be positive")
         if self.backtest_reward_risk <= 0:
             raise ValueError("BACKTEST_REWARD_RISK must be positive")
-        if self.outcome_max_age_hours < 1:
-            raise ValueError("OUTCOME_MAX_AGE_HOURS must be at least 1")
+        if not 1 <= self.outcome_max_age_hours <= 72:
+            raise ValueError("OUTCOME_MAX_AGE_HOURS must be between 1 and 72")
         if not 0.02 <= self.calibration_bin_width <= 0.20:
             raise ValueError("CALIBRATION_BIN_WIDTH must be between 0.02 and 0.20")
         if self.calibration_prior_strength < 5:
@@ -128,6 +129,8 @@ class Settings:
             raise ValueError("MAX_TRADES_PER_DAY must be 1 or 2")
         if self.max_stale_multiplier < 1.5:
             raise ValueError("MAX_STALE_MULTIPLIER must be at least 1.5")
+        if not 1 <= self.max_signal_delay_minutes <= 15:
+            raise ValueError("MAX_SIGNAL_DELAY_MINUTES must be between 1 and 15")
         try:
             ZoneInfo(self.trade_timezone)
         except ZoneInfoNotFoundError as exc:
@@ -135,8 +138,8 @@ class Settings:
         invalid = set(self.timeframes) - allowed
         if invalid:
             raise ValueError(f"Unsupported TIMEFRAMES: {sorted(invalid)}")
-        if self.research_interval not in allowed:
-            raise ValueError("Unsupported RESEARCH_INTERVAL")
+        if self.research_interval not in allowed or self.research_interval == "1day":
+            raise ValueError("RESEARCH_INTERVAL must be an intraday supported interval up to 8h")
         if self.macro_interval not in allowed:
             raise ValueError("Unsupported MACRO_INTERVAL")
         required = {self.research_interval, "1h", "4h"}
