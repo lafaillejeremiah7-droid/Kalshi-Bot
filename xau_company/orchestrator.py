@@ -17,6 +17,7 @@ from .agents import (
 from .context import MacroContextAgent, MultiTimeframeAgent, NewsRiskAgent
 from .indicators import atr
 from .models import AgentVote, TradeSignal
+from .quality import INTERVAL_MINUTES
 from .research import StrategyResearchAgent
 from .selector import StrategySelectorAgent
 
@@ -31,11 +32,16 @@ class BossAgent:
         min_consensus: int = 3,
         high_impact_events_utc: str = "",
         news_block_minutes: int = 20,
+        research_interval: str = "15min",
     ) -> None:
         self.lab = lab
         self.min_confidence = min_confidence
+        self.research_interval = research_interval
         self.regime_agent = RegimeAgent()
-        self.selector = StrategySelectorAgent(min_probability=min_confidence, min_agreement=max(2, min_consensus - 1))
+        self.selector = StrategySelectorAgent(
+            min_probability=min_confidence,
+            min_agreement=max(1, int(min_consensus)),
+        )
         self.multi_timeframe = MultiTimeframeAgent()
         self.macro_context = MacroContextAgent()
         self.news_risk = NewsRiskAgent.from_csv(high_impact_events_utc, news_block_minutes)
@@ -70,10 +76,13 @@ class BossAgent:
         frames: dict[str, pd.DataFrame] | pd.DataFrame,
         dxy: pd.DataFrame | None = None,
         yield_df: pd.DataFrame | None = None,
+        entry_price: float | None = None,
     ) -> TradeSignal | None:
         frame_map = self._normalize_frames(frames)
-        core = self._pick_frame(frame_map, ("15min", "5min", "1h", "4h", "1min"))
-        execution = self._pick_frame(frame_map, ("5min", "1min", "15min"))
+        # The strategy was researched on RESEARCH_INTERVAL, so live direction and
+        # ATR risk geometry must use that same timeframe whenever available.
+        core = self._pick_frame(frame_map, (self.research_interval, "15min"))
+        execution = self._pick_frame(frame_map, ("5min", "1min"))
         if core is None or execution is None or len(core) < 220 or not self.lab.catalog:
             return None
 
@@ -90,13 +99,17 @@ class BossAgent:
         if pick is None:
             return None
 
-        entry = float(execution.close.iloc[-1])
-        a = float(atr(execution, 14).iloc[-1])
+        if entry_price is None or not np.isfinite(float(entry_price)) or float(entry_price) <= 0:
+            return None
+        entry = float(entry_price)
+        a = float(atr(core, 14).iloc[-1])
         if not np.isfinite(a) or a <= 0:
             return None
 
-        stop_mult = 1.35 if regime == "volatile" else (1.05 if regime == "range" else 1.20)
-        rr = 1.85 if regime.startswith("trend") else (1.55 if regime == "range" else 1.70)
+        # Match the exact stop and reward/risk assumptions used by the research
+        # lifecycle backtester instead of changing geometry after selection.
+        stop_mult = float(self.lab.backtester.stop_atr)
+        rr = float(self.lab.backtester.reward_risk)
         risk = a * stop_mult
         if pick.direction.value == "BUY":
             sl, tp = entry - risk, entry + risk * rr
@@ -105,6 +118,13 @@ class BossAgent:
 
         candidate = pick.score
         wf_hit = candidate.walk_forward_hit_rate if candidate.walk_forward_hit_rate > 0 else candidate.valid_hit_rate
+        oos_trades = sum(max(0, int(n)) for n in candidate.regime_trades.values())
+        if oos_trades <= 0:
+            oos_trades = int(candidate.trades)
+        holding_bars = int(self.lab.HORIZONS.get(candidate.candidate.family, 4))
+        research_minutes = int(INTERVAL_MINUTES.get(self.research_interval, 15))
+        max_holding_minutes = holding_bars * research_minutes
+
         reasons = [
             f"Strategy Selector: {pick.label}",
             f"Walk-forward OOS hit rate: {wf_hit:.1%} over {candidate.folds} folds; stability {pick.walk_forward_stability:.0%}",
@@ -145,6 +165,7 @@ class BossAgent:
                 "max_loss_streak": candidate.max_loss_streak,
                 "backtest_model": candidate.backtest_model,
                 "trades": candidate.trades,
+                "oos_trades": oos_trades,
                 "research_score": candidate.score,
                 "regime_fit": pick.regime_fit,
                 "regime_history": pick.regime_history,
@@ -152,5 +173,11 @@ class BossAgent:
                 "timeframe_alignment": pick.timeframe_alignment,
                 "macro_alignment": pick.macro_alignment,
                 "lifecycle_quality": pick.lifecycle_quality,
+                "research_interval": self.research_interval,
+                "max_holding_bars": holding_bars,
+                "max_holding_minutes": max_holding_minutes,
+                "resolution_interval_minutes": 1,
+                "stop_atr": stop_mult,
+                "reward_risk": rr,
             },
         )
