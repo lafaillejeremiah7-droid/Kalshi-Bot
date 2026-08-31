@@ -4,6 +4,7 @@ import pandas as pd
 from xau_company.backtest import TradeLifecycleBacktester
 from xau_company.context import MultiTimeframeAgent, NewsRiskAgent
 from xau_company.models import AgentVote, Direction, TradeSignal
+from xau_company.outcomes import OutcomeCalibrationAgent
 from xau_company.research import Candidate, CandidateScore, StrategyResearchAgent
 from xau_company.selector import StrategySelectorAgent
 from xau_company.telegram import TelegramNotifier
@@ -52,6 +53,66 @@ def test_trade_lifecycle_enters_next_bar_and_assumes_stop_first_on_collision():
     assert trade.exit_reason == "stop"
     assert trade.exit_price == 98.0
     assert trade.r_multiple == -1.0
+
+
+def test_outcome_ledger_dedupes_and_resolves_collision_as_loss(tmp_path):
+    tracker = OutcomeCalibrationAgent(str(tmp_path / "outcomes.sqlite3"))
+    signal = TradeSignal(
+        "XAU/USD", Direction.BUY, 100, 98, 102, 0.80, "trend_up", ["test"], [],
+        selected_strategy="trend(5, 30, 0.0)",
+    )
+    observed = pd.Timestamp("2026-08-30T15:00:00Z")
+
+    assert tracker.exists(signal, observed) is False
+    assert tracker.record(signal, observed, selection_confidence=0.80) is True
+    assert tracker.exists(signal, observed) is True
+    assert tracker.record(signal, observed, selection_confidence=0.80) is False
+
+    candles = pd.DataFrame({
+        "datetime": [pd.Timestamp("2026-08-30T15:05:00Z")],
+        "high": [103.0],
+        "low": [97.0],
+    })
+    resolved = tracker.resolve_open(candles)
+    assert resolved == {"wins": 0, "losses": 1, "expired": 0}
+    summary = tracker.summary()
+    assert summary["resolved"] == 1
+    assert summary["losses"] == 1
+    assert summary["win_rate"] == 0.0
+
+
+def test_forward_losses_lower_calibrated_confidence(tmp_path):
+    tracker = OutcomeCalibrationAgent(
+        str(tmp_path / "calibration.sqlite3"),
+        bin_width=0.05,
+        prior_strength=20,
+    )
+    base = pd.Timestamp("2026-08-30T15:00:00Z")
+    for i in range(10):
+        signal = TradeSignal(
+            "XAU/USD", Direction.BUY, 100 + i * 0.01, 98, 102, 0.80,
+            "trend_up", ["test"], [], selected_strategy="trend(5, 30, 0.0)",
+        )
+        tracker.record(signal, base + pd.Timedelta(minutes=i), selection_confidence=0.80)
+
+    candles = pd.DataFrame({
+        "datetime": [base + pd.Timedelta(minutes=11)],
+        "high": [101.0],
+        "low": [97.0],
+    })
+    tracker.resolve_open(candles)
+    calibrated = tracker.calibrate(0.80, "trend(5, 30, 0.0)", "trend_up")
+    assert calibrated.samples == 10
+    assert calibrated.wins == 0
+    assert calibrated.probability < 0.80
+    assert calibrated.brier_score is not None
+
+
+def test_no_forward_samples_leave_confidence_unchanged(tmp_path):
+    tracker = OutcomeCalibrationAgent(str(tmp_path / "empty.sqlite3"))
+    calibrated = tracker.calibrate(0.76, "trend(5, 30, 0.0)", "trend_up")
+    assert calibrated.samples == 0
+    assert calibrated.probability == 0.76
 
 
 def test_research_runs_walk_forward_lifecycle_and_caps_catalog():
@@ -170,9 +231,9 @@ def test_news_risk_vetoes_inside_blackout_window():
     assert vote.metadata["veto"] is True
 
 
-def test_telegram_format_contains_trade_strategy_and_lifecycle_fields():
+def test_telegram_format_contains_trade_strategy_lifecycle_and_calibration_fields():
     s = TradeSignal(
-        "XAU/USD", Direction.BUY, 2500, 2490, 2518, 0.8, "trend_up", ["test"], [],
+        "XAU/USD", Direction.BUY, 2500, 2490, 2518, 0.74, "trend_up", ["test"], [],
         selected_strategy="trend(5, 30, 0.0)",
         strategy_stats={
             "valid_hit_rate": 0.68,
@@ -183,6 +244,9 @@ def test_telegram_format_contains_trade_strategy_and_lifecycle_fields():
             "avg_r_multiple": 0.35,
             "max_drawdown_r": 2.4,
             "max_loss_streak": 3,
+            "selection_confidence_raw": 0.80,
+            "calibration_samples": 12,
+            "calibration_brier_score": 0.19,
         },
     )
     text = TelegramNotifier("", "").format_signal(s)
@@ -195,3 +259,5 @@ def test_telegram_format_contains_trade_strategy_and_lifecycle_fields():
     assert "TP: 2518.00" in text
     assert "SL: 2490.00" in text
     assert "Selection confidence: 80.0%" in text
+    assert "Forward-calibrated confidence: 74.0% from 12 resolved outcomes" in text
+    assert "Calibration Brier score: 0.1900" in text
