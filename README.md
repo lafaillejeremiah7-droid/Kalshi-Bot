@@ -15,7 +15,8 @@ A research-first XAU/USD signal engine. The company researches a large strategy 
 9. **Price/Structure Team** — candle and higher-high/lower-low confirmation.
 10. **Macro Team** — USD and Treasury-yield context when those feeds are available.
 11. **Risk Team** — volatility/session guards plus high-impact-news vetoes.
-12. **Strategy Selector + Boss** — chooses the researched strategy best suited to the current market, computes the final risk geometry and authorizes Telegram delivery.
+12. **Strategy Selector + Boss** — chooses the researched strategy best suited to the current market and computes final risk geometry.
+13. **Outcome & Calibration Bot** — permanently records emitted signals, resolves later TP/SL outcomes, tracks forward win rate/Brier score and calibrates future release confidence.
 
 ## Research model
 
@@ -25,7 +26,7 @@ Each candidate is evaluated using expanding walk-forward validation and a realis
 
 - The signal must exist on a completed candle.
 - The simulated trade enters on the **next candle open**.
-- Spread and configurable slippage are charged on both sides of the trade.
+- Spread and configurable slippage are charged.
 - Stop-loss and take-profit are based on ATR-known information from the signal candle.
 - If the same OHLC candle touches both TP and SL, the backtester assumes **SL happened first**.
 - A second trade cannot open while the first simulated trade is active.
@@ -33,11 +34,24 @@ Each candidate is evaluated using expanding walk-forward validation and a realis
 
 Strategies are ranked using out-of-sample hit rate, fold stability, executed-trade sample size, profit factor, average R-multiple, net expectancy, maximum drawdown, losing-streak behavior and performance by market regime.
 
-The live selector then combines those historical metrics with current regime fit, 1m/5m/15m/1h/4h alignment, specialist analyst confirmation and optional USD/yield context.
+The live selector combines those historical metrics with current regime fit, 1m/5m/15m/1h/4h alignment, specialist analyst confirmation and optional USD/yield context.
 
-`Selection confidence` is a relative strategy-selection score, not a guaranteed or statistically calibrated probability of profit.
+## Forward outcome calibration
 
-## Main research settings
+Every paper/live signal that is actually emitted is written to a local SQLite ledger. On later cycles the Outcome & Calibration Bot checks completed OHLC candles after that signal and resolves it as:
+
+- `WIN` when TP is reached first.
+- `LOSS` when SL is reached first.
+- `LOSS` when one candle contains both TP and SL because intrabar ordering is unknown.
+- `EXPIRED` after `OUTCOME_MAX_AGE_HOURS`; expired signals are not counted as wins or losses.
+
+The original selector score is stored as `Selection confidence`. The release layer then computes a **Forward-calibrated confidence** using resolved signals from the same confidence bucket, with strategy-family + regime evidence used after enough samples exist. Bayesian shrinkage keeps a tiny sample from moving confidence aggressively.
+
+If forward-calibrated confidence falls below `MIN_CONFIDENCE`, the signal is vetoed even if the research selector originally approved it.
+
+The ledger also prevents the same execution-candle signal from being resent after a restart. The SQLite file is deliberately excluded from Git so live/paper outcome history remains runtime data rather than source code.
+
+## Main settings
 
 ```text
 MAX_CANDIDATES=20000
@@ -48,6 +62,10 @@ SPREAD_BPS=1.5
 SLIPPAGE_BPS=0.5
 BACKTEST_STOP_ATR=1.20
 BACKTEST_REWARD_RISK=1.70
+OUTCOME_DB_PATH=data/xau_outcomes.sqlite3
+OUTCOME_MAX_AGE_HOURS=72
+CALIBRATION_BIN_WIDTH=0.05
+CALIBRATION_PRIOR_STRENGTH=20
 ```
 
 ## Setup
@@ -65,7 +83,7 @@ Fill in:
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_CHAT_ID`
 
-Keep `PAPER_MODE=true` until the forward results justify changing it. In paper mode the company logs the signal instead of sending it.
+Keep `PAPER_MODE=true` until enough forward evidence exists. In paper mode the company logs the signal and still records/resolves it for calibration.
 
 ## Run
 
@@ -87,17 +105,18 @@ Entry: 0000.00
 TP: 0000.00
 SL: 0000.00
 Selection confidence: 00.0%
+Forward-calibrated confidence: 00.0% from N resolved outcomes
+Calibration Brier score: 0.0000
 Regime: trend_up
 R:R: 0.00
 ```
 
 ## Remaining production work
 
-- Persist every emitted signal and its realized outcome in a database.
-- Calibrate the selection score against real forward outcomes before calling it a probability.
-- Add stronger economic-calendar ingestion instead of manually configured event timestamps.
-- Add stale-candle/market-hours guards, API backoff and health monitoring.
-- Add embargo/multiple-testing controls such as stronger overfit penalties.
+- Add stronger automatic economic-calendar ingestion instead of manually configured event timestamps.
+- Add stale-candle/market-hours guards, API retry/backoff and health monitoring.
+- Add stronger multiple-testing/overfit controls for the 20k-candidate research process.
+- Persist the researched strategy catalog across restarts to reduce startup work.
 - Deploy only after sustained paper/shadow validation.
 
 This is a research framework, not a guarantee of profit.
