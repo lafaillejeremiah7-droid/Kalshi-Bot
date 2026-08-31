@@ -1,0 +1,34 @@
+name: Real Data Overfit Audit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "xau_company/**"
+      - "scripts/real_data_overfit_audit.py"
+      - ".github/workflows/real-data-overfit-audit.yml"
+      - "requirements.txt"
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Compile audit path
+        run: python -m compileall -q xau_company scripts/real_data_overfit_audit.py
+      - name: Run real XAUUSD overfit audit
+        run: python scripts/real_data_overfit_audit.py
+      - name: Upload audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-data-overfit-audit
+          path: real-data-overfit-audit.json
+          if-no-files-found: warn
