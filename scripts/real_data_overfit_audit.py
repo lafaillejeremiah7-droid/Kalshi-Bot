@@ -50,8 +50,10 @@ def load_real_xauusd() -> pd.DataFrame:
 
 def main() -> None:
     df = load_real_xauusd()
+    # 27,801 is the complete code-defined seed/base universe. Using this exact
+    # budget prevents balanced sampling from leaving any base variant untested.
     lab = AdaptiveStrategyResearchAgent(
-        max_candidates=4_000,
+        max_candidates=27_801,
         catalog_size=600,
         walk_forward_folds=4,
         min_walk_forward_folds=2,
@@ -85,6 +87,7 @@ def main() -> None:
         "universe_size": lab.last_universe_size,
         "evaluated": lab.last_evaluated,
         "scored_and_audited": lab.last_seed_audited,
+        "not_scored_or_not_auditable": lab.last_evaluated - lab.last_seed_audited,
         "overfit_risk_rejected": lab.last_seed_overfit_rejected,
         "live_eligible_before_catalog_cap": lab.last_seed_live_eligible,
         "live_catalog": len(lab.catalog),
@@ -107,6 +110,11 @@ def main() -> None:
     REPORT_PATH.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(report, indent=2))
 
+    if lab.last_universe_size != 27_801 or lab.last_evaluated != 27_801:
+        raise SystemExit(
+            f"FAIL: full base universe was not tested: universe={lab.last_universe_size} "
+            f"evaluated={lab.last_evaluated}"
+        )
     if lab.last_seed_audited == 0:
         raise SystemExit("FAIL: no strategies produced auditable walk-forward scores")
     if leaked:
