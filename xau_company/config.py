@@ -33,6 +33,9 @@ class Settings:
     min_walk_forward_folds: int = int(os.getenv("MIN_WALK_FORWARD_FOLDS", "2"))
     research_every_cycles: int = int(os.getenv("RESEARCH_EVERY_CYCLES", "60"))
     spread_bps: float = float(os.getenv("SPREAD_BPS", "1.5"))
+    slippage_bps: float = float(os.getenv("SLIPPAGE_BPS", "0.5"))
+    backtest_stop_atr: float = float(os.getenv("BACKTEST_STOP_ATR", "1.20"))
+    backtest_reward_risk: float = float(os.getenv("BACKTEST_REWARD_RISK", "1.70"))
     paper_mode: bool = _bool("PAPER_MODE", True)
     dxy_symbol: str = os.getenv("DXY_SYMBOL", "DXY")
     yield_symbol: str = os.getenv("YIELD_SYMBOL", "US10Y")
@@ -57,6 +60,12 @@ class Settings:
             raise ValueError("RESEARCH_CATALOG_SIZE must be at least 50")
         if self.walk_forward_folds < 2:
             raise ValueError("WALK_FORWARD_FOLDS must be at least 2")
+        if self.spread_bps < 0 or self.slippage_bps < 0:
+            raise ValueError("SPREAD_BPS and SLIPPAGE_BPS cannot be negative")
+        if self.backtest_stop_atr <= 0:
+            raise ValueError("BACKTEST_STOP_ATR must be positive")
+        if self.backtest_reward_risk <= 0:
+            raise ValueError("BACKTEST_REWARD_RISK must be positive")
         allowed = {"1min", "5min", "15min", "30min", "45min", "1h", "2h", "4h", "8h", "1day"}
         invalid = set(self.timeframes) - allowed
         if invalid:
