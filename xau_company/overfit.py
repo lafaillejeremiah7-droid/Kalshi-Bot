@@ -16,14 +16,7 @@ class OverfitAuditResult:
 
 
 class OverfitAuditor:
-    """Conservative promotion gate for discovered/evolved strategies.
-
-    The research score already contains walk-forward stability, profit factor,
-    average R, drawdown and sample-size information. This auditor adds a separate
-    multiple-testing penalty that becomes stricter as more variants are tested,
-    plus hard quality gates. It intentionally does not claim to be a formal
-    Deflated-Sharpe/PBO implementation; it is a transparent selection-bias guard.
-    """
+    """Conservative promotion gate for discovered/evolved strategies."""
 
     name = "Overfit Auditor"
 
@@ -53,6 +46,11 @@ class OverfitAuditor:
         self.penalty_per_decade = max(0.0, float(penalty_per_decade))
         self.max_multiplicity_penalty = max(0.0, float(max_multiplicity_penalty))
 
+    @staticmethod
+    def oos_trade_count(score: CandidateScore) -> int:
+        regime_total = sum(max(0, int(n)) for n in score.regime_trades.values())
+        return regime_total if regime_total > 0 else max(0, int(score.trades))
+
     def multiplicity_penalty(self, tested_trials: int) -> float:
         trials = max(1, int(tested_trials))
         penalty = self.penalty_per_decade * log10(max(10, trials))
@@ -73,8 +71,9 @@ class OverfitAuditor:
             )
         if float(score.avg_r_multiple) < self.min_avg_r:
             reasons.append(f"average R {score.avg_r_multiple:.3f} < {self.min_avg_r:.3f}")
-        if int(score.trades) < self.min_trades:
-            reasons.append(f"trade sample {score.trades} < {self.min_trades}")
+        oos_trades = self.oos_trade_count(score)
+        if oos_trades < self.min_trades:
+            reasons.append(f"OOS trade sample {oos_trades} < {self.min_trades}")
         if float(score.walk_forward_std) > self.max_walk_forward_std:
             reasons.append(
                 f"walk-forward dispersion {score.walk_forward_std:.3f} > {self.max_walk_forward_std:.3f}"
@@ -89,9 +88,7 @@ class OverfitAuditor:
                 f"max drawdown {score.max_drawdown_r:.2f}R > {self.max_drawdown_r:.2f}R"
             )
         if int(score.max_loss_streak) > self.max_loss_streak:
-            reasons.append(
-                f"loss streak {score.max_loss_streak} > {self.max_loss_streak}"
-            )
+            reasons.append(f"loss streak {score.max_loss_streak} > {self.max_loss_streak}")
         if int(score.folds) < self.min_folds:
             reasons.append(f"walk-forward folds {score.folds} < {self.min_folds}")
 
