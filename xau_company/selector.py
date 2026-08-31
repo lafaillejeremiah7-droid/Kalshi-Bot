@@ -22,6 +22,7 @@ class StrategyPick:
     regime_history: float = 0.5
     regime_samples: int = 0
     walk_forward_stability: float = 0.5
+    lifecycle_quality: float = 0.5
 
     @property
     def label(self) -> str:
@@ -114,6 +115,13 @@ class StrategySelectorAgent:
             return 0.50
         return float(np.clip(0.5 + signed / active * 0.5, 0.0, 1.0))
 
+    @staticmethod
+    def _lifecycle_quality(result: CandidateScore) -> float:
+        avg_r_score = float(np.clip(0.5 + 0.5 * np.tanh(result.avg_r_multiple / 0.50), 0.0, 1.0))
+        drawdown_score = float(np.exp(-max(0.0, result.max_drawdown_r) / 8.0))
+        streak_score = float(np.exp(-max(0, result.max_loss_streak) / 8.0))
+        return avg_r_score * 0.50 + drawdown_score * 0.35 + streak_score * 0.15
+
     def select(self, df: pd.DataFrame, regime: str, votes: list[AgentVote], lab: StrategyResearchAgent) -> StrategyPick | None:
         catalog = lab.catalog if lab.catalog else lab.top
         if not catalog:
@@ -138,20 +146,22 @@ class StrategySelectorAgent:
             wf_hit = result.walk_forward_hit_rate if result.walk_forward_hit_rate > 0 else result.valid_hit_rate
             stability_gap = abs(result.train_hit_rate - result.valid_hit_rate)
             stability = float(np.clip(1.0 - stability_gap - result.walk_forward_std * 1.5, 0.0, 1.0))
-            pf_score = result.profit_factor / (1.0 + result.profit_factor)
+            pf_score = result.profit_factor / (1.0 + max(0.0, result.profit_factor))
+            lifecycle_quality = self._lifecycle_quality(result)
 
             probability = (
-                wf_hit * 0.24
-                + result.score * 0.14
-                + regime_fit * 0.20
-                + support * 0.10
-                + timeframe_alignment * 0.14
-                + macro_alignment * 0.05
+                wf_hit * 0.20
+                + result.score * 0.13
+                + regime_fit * 0.18
+                + support * 0.09
+                + timeframe_alignment * 0.13
+                + macro_alignment * 0.04
                 + pf_score * 0.05
-                + stability * 0.08
+                + stability * 0.07
+                + lifecycle_quality * 0.11
                 - opposition * 0.08
             )
-            sample_trust = float(np.clip(np.log1p(result.trades) / np.log(501), 0.0, 1.0))
+            sample_trust = float(np.clip(np.log1p(result.trades) / np.log(401), 0.0, 1.0))
             probability -= (1.0 - sample_trust) * 0.08
             probability = float(np.clip(probability, 0.0, 0.97))
 
@@ -167,6 +177,7 @@ class StrategySelectorAgent:
                 regime_history=regime_history,
                 regime_samples=regime_samples,
                 walk_forward_stability=stability,
+                lifecycle_quality=lifecycle_quality,
             )
             if best is None or pick.probability_score > best.probability_score:
                 best = pick
