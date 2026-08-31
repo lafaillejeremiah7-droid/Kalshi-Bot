@@ -19,11 +19,20 @@ class TelegramNotifier:
         trades = stats.get("trades")
         folds = stats.get("folds")
         pf = stats.get("profit_factor")
+        avg_r = stats.get("avg_r_multiple")
+        max_dd = stats.get("max_drawdown_r")
+        streak = stats.get("max_loss_streak")
+
         validation_line = ""
         if isinstance(valid, (int, float)) and trades is not None:
             fold_text = f" / {folds} walk-forward folds" if folds else ""
-            validation_line = f"OOS validation: {valid:.1%} over {trades} signals{fold_text}\n"
+            validation_line = f"OOS validation: {valid:.1%} over {trades} executed trades{fold_text}\n"
         pf_line = f"Profit factor: {pf:.2f}\n" if isinstance(pf, (int, float)) else ""
+        lifecycle_line = ""
+        if isinstance(avg_r, (int, float)) and isinstance(max_dd, (int, float)):
+            streak_text = f" / worst streak {streak}" if isinstance(streak, int) else ""
+            lifecycle_line = f"Avg R: {avg_r:+.2f} / Max DD: {max_dd:.2f}R{streak_text}\n"
+
         return (
             f"XAU COMPANY SIGNAL\n"
             f"Symbol: {s.symbol}\n"
@@ -31,6 +40,7 @@ class TelegramNotifier:
             f"Strategy: {strategy}\n"
             f"{validation_line}"
             f"{pf_line}"
+            f"{lifecycle_line}"
             f"Entry: {s.entry:.2f}\n"
             f"TP: {s.take_profit:.2f}\n"
             f"SL: {s.stop_loss:.2f}\n"
