@@ -2,15 +2,35 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import datetime, timezone
+
+import pandas as pd
 
 from xau_company.config import Settings
 from xau_company.data import TwelveDataClient
 from xau_company.orchestrator import BossAgent
+from xau_company.outcomes import OutcomeCalibrationAgent
 from xau_company.research import StrategyResearchAgent
 from xau_company.telegram import TelegramNotifier
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("xau-company")
+
+
+def _resolution_frame(frames: dict[str, pd.DataFrame]) -> pd.DataFrame | None:
+    for timeframe in ("1min", "5min", "15min", "1h", "4h"):
+        frame = frames.get(timeframe)
+        if frame is not None and not frame.empty:
+            return frame
+    return next((df for df in frames.values() if df is not None and not df.empty), None)
+
+
+def _observed_at(frame: pd.DataFrame | None):
+    if frame is not None and not frame.empty and "datetime" in frame.columns:
+        value = frame["datetime"].iloc[-1]
+        if pd.notna(value):
+            return value
+    return datetime.now(timezone.utc)
 
 
 def run() -> None:
@@ -26,6 +46,12 @@ def run() -> None:
         slippage_bps=cfg.slippage_bps,
         backtest_stop_atr=cfg.backtest_stop_atr,
         backtest_reward_risk=cfg.backtest_reward_risk,
+    )
+    outcomes = OutcomeCalibrationAgent(
+        db_path=cfg.outcome_db_path,
+        max_age_hours=cfg.outcome_max_age_hours,
+        bin_width=cfg.calibration_bin_width,
+        prior_strength=cfg.calibration_prior_strength,
     )
     boss = BossAgent(
         lab,
@@ -46,6 +72,21 @@ def run() -> None:
             frames = market.multi_timeframe(cfg.symbol, cfg.timeframes, cfg.context_output_size)
             if not frames:
                 raise RuntimeError("No XAU/USD timeframes available")
+
+            resolution_df = _resolution_frame(frames)
+            if resolution_df is not None:
+                resolved = outcomes.resolve_open(resolution_df)
+                if sum(resolved.values()):
+                    summary = outcomes.summary()
+                    log.info(
+                        "Outcome desk resolved wins=%s losses=%s expired=%s total_resolved=%s forward_win_rate=%s brier=%s",
+                        resolved["wins"],
+                        resolved["losses"],
+                        resolved["expired"],
+                        summary["resolved"],
+                        f"{summary['win_rate']:.1%}" if isinstance(summary["win_rate"], float) else "n/a",
+                        f"{summary['brier_score']:.4f}" if isinstance(summary["brier_score"], float) else "n/a",
+                    )
 
             if cycle == 0 or cycle % cfg.research_every_cycles == 0:
                 research_df = market.candles(cfg.symbol, cfg.research_interval, cfg.output_size)
@@ -68,25 +109,58 @@ def run() -> None:
 
             signal = boss.decide(cfg.symbol, frames, dxy=dxy, yield_df=yields)
             if signal:
-                fingerprint = (
-                    signal.direction.value,
-                    signal.selected_strategy,
-                    round(signal.entry, 1),
-                    round(signal.stop_loss, 1),
-                    round(signal.take_profit, 1),
+                raw_confidence = float(signal.confidence)
+                calibration = outcomes.calibrate(
+                    raw_confidence,
+                    strategy=signal.selected_strategy,
+                    regime=signal.regime,
                 )
-                if fingerprint != last_fingerprint:
+                signal.strategy_stats = dict(signal.strategy_stats or {})
+                signal.strategy_stats.update(
+                    {
+                        "selection_confidence_raw": raw_confidence,
+                        "calibrated_confidence": calibration.probability,
+                        "calibration_samples": calibration.samples,
+                        "calibration_wins": calibration.wins,
+                        "calibration_brier_score": calibration.brier_score,
+                    }
+                )
+                signal.confidence = calibration.probability
+
+                if signal.confidence < cfg.min_confidence:
                     log.info(
-                        "Signal %s using %s confidence %.1f%%",
+                        "Calibration veto: raw %.1f%% -> calibrated %.1f%% from %s forward outcomes",
+                        raw_confidence * 100,
+                        signal.confidence * 100,
+                        calibration.samples,
+                    )
+                else:
+                    observed_at = _observed_at(resolution_df)
+                    fingerprint = (
                         signal.direction.value,
                         signal.selected_strategy,
-                        signal.confidence * 100,
+                        round(signal.entry, 1),
+                        round(signal.stop_loss, 1),
+                        round(signal.take_profit, 1),
                     )
-                    if cfg.paper_mode:
-                        log.info("PAPER_MODE: %s", telegram.format_signal(signal).replace("\n", " | "))
-                    else:
-                        telegram.send(signal)
-                    last_fingerprint = fingerprint
+                    already_recorded = outcomes.exists(signal, observed_at)
+                    if fingerprint != last_fingerprint and not already_recorded:
+                        log.info(
+                            "Signal %s using %s raw_confidence %.1f%% calibrated_confidence %.1f%% samples=%s",
+                            signal.direction.value,
+                            signal.selected_strategy,
+                            raw_confidence * 100,
+                            signal.confidence * 100,
+                            calibration.samples,
+                        )
+                        if cfg.paper_mode:
+                            log.info("PAPER_MODE: %s", telegram.format_signal(signal).replace("\n", " | "))
+                        else:
+                            telegram.send(signal)
+                        outcomes.record(signal, observed_at, selection_confidence=raw_confidence)
+                        last_fingerprint = fingerprint
+                    elif already_recorded:
+                        log.info("Duplicate signal suppressed by persistent outcome ledger")
             else:
                 log.info("No strategy passed research + market-context + risk thresholds")
         except Exception:
