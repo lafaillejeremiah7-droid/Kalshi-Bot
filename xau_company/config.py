@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -40,6 +42,8 @@ class Settings:
     outcome_max_age_hours: int = int(os.getenv("OUTCOME_MAX_AGE_HOURS", "72"))
     calibration_bin_width: float = float(os.getenv("CALIBRATION_BIN_WIDTH", "0.05"))
     calibration_prior_strength: float = float(os.getenv("CALIBRATION_PRIOR_STRENGTH", "20"))
+    trade_timezone: str = os.getenv("TRADE_TIMEZONE", "America/Chicago")
+    max_trades_per_day: int = int(os.getenv("MAX_TRADES_PER_DAY", "2"))
     paper_mode: bool = _bool("PAPER_MODE", True)
     dxy_symbol: str = os.getenv("DXY_SYMBOL", "DXY")
     yield_symbol: str = os.getenv("YIELD_SYMBOL", "US10Y")
@@ -76,6 +80,12 @@ class Settings:
             raise ValueError("CALIBRATION_BIN_WIDTH must be between 0.02 and 0.20")
         if self.calibration_prior_strength < 5:
             raise ValueError("CALIBRATION_PRIOR_STRENGTH must be at least 5")
+        if not 1 <= self.max_trades_per_day <= 2:
+            raise ValueError("MAX_TRADES_PER_DAY must be 1 or 2")
+        try:
+            ZoneInfo(self.trade_timezone)
+        except ZoneInfoNotFoundError as exc:
+            raise ValueError(f"Unknown TRADE_TIMEZONE: {self.trade_timezone}") from exc
         allowed = {"1min", "5min", "15min", "30min", "45min", "1h", "2h", "4h", "8h", "1day"}
         invalid = set(self.timeframes) - allowed
         if invalid:
