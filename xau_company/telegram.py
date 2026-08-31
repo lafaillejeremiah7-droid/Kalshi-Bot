@@ -22,6 +22,9 @@ class TelegramNotifier:
         avg_r = stats.get("avg_r_multiple")
         max_dd = stats.get("max_drawdown_r")
         streak = stats.get("max_loss_streak")
+        raw_conf = stats.get("selection_confidence_raw")
+        calibration_samples = stats.get("calibration_samples")
+        brier = stats.get("calibration_brier_score")
 
         validation_line = ""
         if isinstance(valid, (int, float)) and trades is not None:
@@ -32,6 +35,17 @@ class TelegramNotifier:
         if isinstance(avg_r, (int, float)) and isinstance(max_dd, (int, float)):
             streak_text = f" / worst streak {streak}" if isinstance(streak, int) else ""
             lifecycle_line = f"Avg R: {avg_r:+.2f} / Max DD: {max_dd:.2f}R{streak_text}\n"
+
+        if isinstance(raw_conf, (int, float)):
+            sample_text = f" from {calibration_samples} resolved outcomes" if isinstance(calibration_samples, int) else ""
+            confidence_lines = (
+                f"Selection confidence: {raw_conf:.1%}\n"
+                f"Forward-calibrated confidence: {s.confidence:.1%}{sample_text}\n"
+            )
+            if isinstance(brier, (int, float)):
+                confidence_lines += f"Calibration Brier score: {brier:.4f}\n"
+        else:
+            confidence_lines = f"Selection confidence: {s.confidence:.1%}\n"
 
         return (
             f"XAU COMPANY SIGNAL\n"
@@ -44,7 +58,7 @@ class TelegramNotifier:
             f"Entry: {s.entry:.2f}\n"
             f"TP: {s.take_profit:.2f}\n"
             f"SL: {s.stop_loss:.2f}\n"
-            f"Selection confidence: {s.confidence:.1%}\n"
+            f"{confidence_lines}"
             f"Regime: {s.regime}\n"
             f"R:R: {s.risk_reward:.2f}\n\n"
             f"Why this strategy now:\n{why}\n\n"
