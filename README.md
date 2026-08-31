@@ -1,108 +1,127 @@
 # XAU/USD Multi-Agent Signal Company
 
-A research-first XAU/USD signal engine. The company researches a large and now **adaptive** strategy universe, validates candidates with conservative trade-lifecycle simulation and expanding walk-forward folds, diagnoses the current market across multiple timeframes and macro context, then lets a boss/risk layer authorize Telegram BUY/SELL signals with Entry, TP and SL.
+A research-first XAU/USD signal engine. The company researches an adaptive strategy universe, validates candidates with conservative lifecycle simulation and chronological walk-forward folds, diagnoses current market conditions, then lets the Selector/Boss authorize at most two qualified Telegram signals per local trading day.
 
-## Company structure
+The framework produces research signals only. It does not place brokerage orders and does not guarantee profit.
 
-1. **Market Data Bot** — pulls XAU/USD OHLC candles and optional macro series.
-2. **Strategy Research Lab** — evaluates up to `MAX_CANDIDATES` each research cycle. The original 27k+ parameter grid is the permanent seed universe, not a ceiling.
-3. **Strategy Discovery & Evolution Bot** — recombines strong, structurally different strategies into new experimental ensembles and stores them in a persistent strategy library.
-4. **Backtest Auditor** — simulates next-bar entries, spread, slippage, ATR stops/targets, non-overlapping trades and conservative same-bar TP/SL ordering.
-5. **Overfit Auditor** — applies a search-size/multiple-testing penalty plus hard walk-forward, PF, average-R, drawdown and loss-streak promotion gates to evolved strategies.
-6. **Regime Bot** — classifies trend-up, trend-down, range or volatile conditions.
-7. **Multi-Timeframe Team** — independently analyzes 1m, 5m, 15m, 1h and 4h horizons, with higher timeframes weighted more heavily.
-8. **Trend / Momentum Team** — trend, triple-trend, RSI-trend, pullback and momentum evidence.
-9. **Breakout Team** — Donchian, Bollinger and volatility-breakout evidence.
-10. **Mean-Reversion Team** — RSI/z-score, Bollinger-reversion and range-fade evidence.
-11. **Price/Structure Team** — candle and higher-high/lower-low confirmation.
-12. **Macro Team** — USD and Treasury-yield context when those feeds are available.
-13. **Risk Team** — volatility/session guards plus high-impact-news vetoes.
-14. **Strategy Selector + Boss** — chooses the researched strategy best suited to the current market and computes final risk geometry.
-15. **Outcome & Calibration Bot** — permanently records emitted signals, resolves later TP/SL outcomes, tracks forward win rate/Brier score and calibrates future release confidence.
-16. **Trade Frequency Guard** — allows qualified setups Monday-Friday only and enforces a persistent maximum of two emitted trades/signals per local trading day.
+## Signal pipeline
+
+1. **Market Data Bot** fetches XAU/USD OHLC data, optional DXY/yield context, and a fresh reference price.
+2. **Market Data Quality Guard** validates candle geometry/timestamps, removes still-forming candles, rejects stale required frames, and blocks closed/maintenance sessions.
+3. **Strategy Research Lab** evaluates up to `MAX_CANDIDATES` from the original 27k+ seed universe plus persistent discoveries.
+4. **Backtest Auditor** uses next-bar entry, spread/slippage, ATR stop/target geometry, non-overlapping trades and conservative same-bar TP/SL ordering.
+5. **Strategy Discovery & Evolution Bot** creates cross-family experiments after research. New ideas start `EXPERIMENTAL` and cannot trade immediately.
+6. **Overfit Auditor** applies hard OOS quality gates plus a multiplicity penalty based on the persistent lifetime number of tested strategies.
+7. **Regime / specialist / timeframe / macro / risk desks** analyze the current completed research candle and surrounding context.
+8. **Strategy Selector** scores only live-eligible strategies. Generic analyst support excludes timeframe and macro votes because those have separate score terms.
+9. **Boss** requires the configured consensus exactly, uses a fresh reference price for Entry, and uses the same ATR stop multiplier and R:R assumptions as the research backtester.
+10. **Outcome & Calibration Bot** calibrates the Selector score from confirmed forward outcomes.
+11. **Trade Frequency Guard + outcome ledger** atomically reserve the setup and daily slot before delivery.
+12. **Telegram** receives the final authorized signal. Telegram is delivery infrastructure, not a trading employee.
+
+## Data synchronization and setup identity
+
+All strategy, regime and specialist logic works from completed candles only. Required `RESEARCH_INTERVAL`, 1h and 4h context must be present and fresh, and at least one fresh 1m/5m execution frame must exist.
+
+A company setup is identified by **symbol + completed research-candle timestamp**. Only one authorization may be emitted for that research candle even if, during later polling, the preferred strategy, direction, quote, stop or target changes. `MAX_SIGNAL_DELAY_MINUTES` also prevents sending a setup too long after its research candle closed.
+
+The final Entry comes from Twelve Data's current-price endpoint rather than simply reusing the last candle close. The framework still labels the signal as research-only because a reference price is not a guaranteed executable broker fill.
 
 ## Adaptive strategy discovery
 
-The initial 27k+ strategy universe is no longer the maximum size of the research space. It is the stable **seed library**.
+The original 27k+ parameter universe is a stable seed library, not the ceiling.
 
-After each research cycle, the Strategy Discovery & Evolution Bot takes strong live-eligible non-ensemble survivors and creates structurally new cross-family experiments. Current evolution modes include:
+After each research cycle, the Evolution Bot creates structurally new cross-family ensembles from strong live-eligible seed strategies. Current modes are:
 
-- `confirm` — both parent strategies must agree on direction.
-- `primary_filter` — a primary strategy may fire only when the second strategy does not oppose it.
-- `consensus_or` — either parent may trigger when the other does not contradict it.
+- `confirm` — both parents must agree.
+- `primary_filter` — the primary may fire only if the secondary does not oppose it.
+- `consensus_or` — either may fire if the other does not contradict it.
 
-Every new structure is stored as `EXPERIMENTAL` in `STRATEGY_LIBRARY_PATH`. New experiments are generated **after** the current research cycle, which prevents a freshly generated idea from immediately influencing a live decision.
+New entries are generated after the current research run and stored as `EXPERIMENTAL`. A later run must backtest them and place them into the research staging catalog before the Overfit Auditor can consider promotion.
 
-On a later research cycle the experiment enters the normal candidate universe and can be backtested. Importantly, an experimental strategy is **not Boss-visible merely because it scored well enough to enter the research staging catalog**. The Overfit Auditor must separately approve it.
+Only `PROMOTED` discoveries can enter the Boss-visible catalog. A promoted discovery that later fails its audit becomes `QUARANTINED` and immediately loses live eligibility. Promoted and quarantined history is protected from experimental-library pruning. When the experimental queue reaches capacity, old unpromoted experiments rotate out so discovery can continue.
 
-Promotion requires the strategy to survive the normal next-bar lifecycle simulation, transaction-cost model and chronological walk-forward folds, then pass additional evolved-strategy gates for:
+The evolution library uses atomic file replacement and a lock on supported Unix/Linux hosts. Lifetime tested-trial count is persisted separately so the multiple-testing penalty grows as the search expands instead of resetting every research cycle.
 
-- a research score after an extra penalty that grows with the number of variants tested,
-- profit factor,
-- average R,
-- minimum executed-trade sample,
-- walk-forward dispersion,
-- train-vs-OOS stability gap,
-- maximum drawdown,
-- maximum losing streak,
-- and sufficient walk-forward fold coverage.
+The current Overfit Auditor is a transparent selection-bias guard, not a formal Deflated Sharpe Ratio or Probability-of-Backtest-Overfitting implementation.
 
-Only strategies with `PROMOTED` status are allowed into the Boss-visible live catalog. `EXPERIMENTAL` strategies remain research-only. If a previously promoted strategy later fails its audit, it becomes `QUARANTINED` and immediately loses live eligibility until future evidence is strong enough to pass again.
+## Research and live risk model
 
-The persistent library preserves parent provenance plus the latest audit metrics/reasons. Storage pruning protects promoted strategies from being evicted by a flood of fresh experiments.
+Research uses expanding chronological walk-forward validation. A candidate must have enough usable OOS folds/trades to survive. Its score incorporates OOS hit rate, sample size, profit factor, average R, expectancy, drawdown, loss streak, fold coverage/stability and regime diversity.
 
-The current Overfit Auditor is a transparent selection-bias guard; it does **not** claim to be a formal Deflated Sharpe Ratio or Probability of Backtest Overfitting implementation. Those remain useful future research upgrades.
+The live Selector's sample-size trust and evolved-strategy promotion gate use the **actual OOS trade sample**, not the larger total historical backtest trade count.
 
-## Research model
+Research lifecycle rules include:
 
-The system does **not** choose the strategy with the highest raw historical win rate. Searching thousands of variants can overfit history.
+- signal known only after a completed candle;
+- entry on the next bar;
+- spread and slippage charged;
+- stop/target based on ATR information known at the signal candle;
+- same candle touching TP and SL is treated as stop-first;
+- only one simulated position at a time;
+- family-specific maximum holding horizon.
 
-Each candidate is evaluated using expanding walk-forward validation and a realistic lifecycle model:
+The Boss now uses the same `BACKTEST_STOP_ATR` and `BACKTEST_REWARD_RISK` values as research. The forward outcome ledger also receives the selected strategy's research holding horizon, so a trade cannot later be called a win after the corresponding backtest would already have timed out.
 
-- The signal must exist on a completed candle.
-- The simulated trade enters on the **next candle open**.
-- Spread and configurable slippage are charged.
-- Stop-loss and take-profit are based on ATR-known information from the signal candle.
-- If the same OHLC candle touches both TP and SL, the backtester assumes **SL happened first**.
-- A second trade cannot open while the first simulated trade is active.
-- Trades crossing a walk-forward fold boundary are excluded from that fold's validation.
+## Selector evidence
 
-Strategies are ranked using out-of-sample hit rate, fold stability, executed-trade sample size, profit factor, average R-multiple, net expectancy, maximum drawdown, losing-streak behavior and performance by market regime.
+For every active live-eligible strategy, the Selector combines:
 
-The live selector combines those historical metrics with current regime fit, 1m/5m/15m/1h/4h alignment, specialist analyst confirmation and optional USD/yield context.
+- walk-forward OOS hit rate;
+- research score;
+- current family/regime fit and regime-specific OOS history;
+- specialist directional support/opposition;
+- weighted 1m/5m/15m/1h/4h alignment;
+- DXY/yield macro alignment;
+- profit factor;
+- walk-forward stability;
+- lifecycle quality from average R, drawdown and loss streak;
+- OOS sample-size trust.
 
-## Forward outcome calibration
+Timeframe and macro votes are not counted again as generic analysts. The highest score still represents a **heuristic selection score**, not a mathematically guaranteed win probability. Confirmed forward outcomes are used afterward for calibration.
 
-Every paper/live signal that is actually emitted is written to a local SQLite ledger. On later cycles the Outcome & Calibration Bot checks completed OHLC candles after that signal and resolves it as:
+## Forward outcome and delivery safety
 
-- `WIN` when TP is reached first.
-- `LOSS` when SL is reached first.
-- `LOSS` when one candle contains both TP and SL because intrabar ordering is unknown.
-- `EXPIRED` after `OUTCOME_MAX_AGE_HOURS`; expired signals are not counted as wins or losses.
+Before a qualifying signal is sent, SQLite uses `BEGIN IMMEDIATE` to atomically check both setup deduplication and the daily signal cap, then reserves the slot.
 
-The original selector score is stored as `Selection confidence`. The release layer then computes a **Forward-calibrated confidence** using resolved signals from the same confidence bucket, with strategy-family + regime evidence used after enough samples exist. Bayesian shrinkage keeps a tiny sample from moving confidence aggressively.
+Delivery states are:
 
-If forward-calibrated confidence falls below `MIN_CONFIDENCE`, the signal is vetoed even if the research selector originally approved it.
+- `RESERVED` — slot claimed immediately before delivery;
+- `SENT` — Telegram/paper delivery confirmed;
+- `UNKNOWN` — delivery may have succeeded but acknowledgement was lost; the slot remains consumed to prevent duplicate sends;
+- `FAILED` — explicit reusable failed reservation state.
 
-The ledger also prevents the same execution-candle signal from being resent after a restart. The SQLite file is deliberately excluded from Git so live/paper outcome history remains runtime data rather than source code.
+On restart, abandoned reservations become `UNKNOWN`, which is conservative: they cannot be resent or reuse the daily slot, and they are excluded from probability calibration.
+
+The outcome bot resolves only confirmed `SENT` signals for calibration. If the emission occurred inside a 1-minute OHLC candle that hit TP/SL, the result is marked `AMBIGUOUS` because OHLC cannot tell whether the hit happened before or after the actual send. Ambiguous/expired/unknown-delivery rows do not train calibration.
+
+Runtime fetches enough 1-minute history to reconstruct up to `OUTCOME_MAX_AGE_HOURS` after downtime; configuration restricts that setting to at most 72 hours under the current 5,000-bar retrieval limit.
 
 ## Trade frequency policy
 
-Trading is setup-dependent; the company never forces a trade just to hit a quota.
+The company never forces a trade.
 
-- Monday-Friday only in `TRADE_TIMEZONE`.
-- Default timezone: `America/Chicago`.
-- The company may emit **0, 1, or 2** qualified trades/signals in a day.
-- `MAX_TRADES_PER_DAY=2` is a hard cap; after the second trade, later setups are vetoed until the next local trading day.
-- The count is read from the persistent outcome ledger, so restarting the process does not reset the daily limit.
+- Monday-Friday accounting in `TRADE_TIMEZONE`.
+- Default: `America/Chicago`.
+- 0, 1 or 2 qualified signals can be emitted in a local day.
+- `MAX_TRADES_PER_DAY=2` is a hard maximum.
+- Atomic reservation prevents two processes from simultaneously claiming the same final slot in the same SQLite database.
 
-## Main settings
+## Core settings
 
 ```text
+RESEARCH_INTERVAL=15min
+TIMEFRAMES=1min,5min,15min,1h,4h
+OUTPUT_SIZE=3000
+CONTEXT_OUTPUT_SIZE=500
+POLL_SECONDS=60
+MIN_CONFIDENCE=0.72
+MIN_CONSENSUS=3
 MAX_CANDIDATES=20000
 RESEARCH_CATALOG_SIZE=600
 WALK_FORWARD_FOLDS=4
 MIN_WALK_FORWARD_FOLDS=2
+RESEARCH_EVERY_CYCLES=60
 ENABLE_STRATEGY_EVOLUTION=true
 STRATEGY_LIBRARY_PATH=data/discovered_strategies.json
 DISCOVERIES_PER_CYCLE=250
@@ -125,6 +144,9 @@ CALIBRATION_BIN_WIDTH=0.05
 CALIBRATION_PRIOR_STRENGTH=20
 TRADE_TIMEZONE=America/Chicago
 MAX_TRADES_PER_DAY=2
+MAX_STALE_MULTIPLIER=4.0
+MAX_SIGNAL_DELAY_MINUTES=5
+PAPER_MODE=true
 ```
 
 ## Setup
@@ -136,48 +158,23 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Fill in:
+Fill in `TWELVE_DATA_API_KEY`, `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`. Keep `PAPER_MODE=true` until enough forward evidence exists.
 
-- `TWELVE_DATA_API_KEY`
-- `TELEGRAM_BOT_TOKEN`
-- `TELEGRAM_CHAT_ID`
-
-Keep `PAPER_MODE=true` until enough forward evidence exists. In paper mode the company logs the signal and still records/resolves it for calibration.
-
-## Run
+Run:
 
 ```bash
 python main.py
 ```
 
-## Telegram signal includes
-
-```text
-XAU COMPANY SIGNAL
-Symbol: XAU/USD
-Action: BUY
-Strategy: <selected researched strategy>
-Daily trade slot: 1/2
-OOS validation: <walk-forward result>
-Profit factor: <PF>
-Avg R: <average R> / Max DD: <drawdown in R>
-Entry: 0000.00
-TP: 0000.00
-SL: 0000.00
-Selection confidence: 00.0%
-Forward-calibrated confidence: 00.0% from N resolved outcomes
-Calibration Brier score: 0.0000
-Regime: trend_up
-R:R: 0.00
-```
+CI compiles `main.py`, `xau_company` and all tests before running the complete pytest suite.
 
 ## Remaining production work
 
-- Add a source-backed research scout that can ingest new public strategy concepts into the experimental pipeline instead of relying only on internal recombination.
-- Add stronger automatic economic-calendar ingestion instead of manually configured event timestamps.
-- Add stale-candle/market-hours guards, API retry/backoff and health monitoring.
-- Add formal Deflated-Sharpe/PBO-style diagnostics and walk-forward embargo/purge controls as the evolving library grows.
-- Persist the researched robust catalog across restarts to reduce startup work.
-- Deploy only after sustained paper/shadow validation.
+- Source-backed research scout for new public strategy concepts; current evolution is internal recombination only.
+- Automatic high-impact economic-calendar ingestion; current event blackout list is manually configured.
+- Formal Deflated-Sharpe/PBO-style diagnostics and purged/embargoed validation.
+- Persistent robust research catalog across restarts.
+- Strategy correlation/agreement model to distinguish independent strategy confirmation from redundant signals.
+- Verified durable hosting/service deployment and durable runtime storage before any claim of continuous operation.
 
 This is a research framework, not a guarantee of profit.
