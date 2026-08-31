@@ -10,14 +10,21 @@ class TelegramRejectedError(RuntimeError):
 
 
 class TelegramNotifier:
+    # Telegram text messages are limited; keep safety headroom for API behavior.
+    MAX_MESSAGE_CHARS = 3900
+
     def __init__(self, bot_token: str, chat_id: str, timeout: int = 15) -> None:
         self.bot_token = bot_token
         self.chat_id = chat_id
         self.timeout = timeout
 
+    @staticmethod
+    def _compact(value: str, limit: int = 320) -> str:
+        text = " ".join(str(value).split())
+        return text if len(text) <= limit else text[: max(1, limit - 1)] + "…"
+
     def format_signal(self, s: TradeSignal) -> str:
-        why = "\n".join(f"• {r}" for r in s.reasons)
-        strategy = s.selected_strategy or "not reported"
+        strategy = self._compact(s.selected_strategy or "not reported", 320)
         stats = s.strategy_stats or {}
         valid = stats.get("walk_forward_hit_rate", stats.get("valid_hit_rate"))
         oos_trades = stats.get("oos_trades", stats.get("trades"))
@@ -41,7 +48,6 @@ class TelegramNotifier:
         if isinstance(avg_r, (int, float)) and isinstance(max_dd, (int, float)):
             streak_text = f" / worst streak {streak}" if isinstance(streak, int) else ""
             lifecycle_line = f"Avg R: {avg_r:+.2f} / Max DD: {max_dd:.2f}R{streak_text}\n"
-
         daily_line = ""
         if isinstance(trades_today_before, int) and isinstance(daily_cap, int):
             daily_line = f"Daily trade slot: {trades_today_before + 1}/{daily_cap}\n"
@@ -57,24 +63,31 @@ class TelegramNotifier:
         else:
             confidence_lines = f"Selection confidence: {s.confidence:.1%}\n"
 
-        return (
-            f"XAU COMPANY SIGNAL\n"
+        # Critical trade geometry and calibration always come before optional reasons.
+        prefix = (
+            "XAU COMPANY SIGNAL\n"
             f"Symbol: {s.symbol}\n"
             f"Action: {s.direction.value}\n"
             f"Strategy: {strategy}\n"
-            f"{daily_line}"
-            f"{validation_line}"
-            f"{pf_line}"
-            f"{lifecycle_line}"
+            f"{daily_line}{validation_line}{pf_line}{lifecycle_line}"
             f"Entry: {s.entry:.2f}\n"
             f"TP: {s.take_profit:.2f}\n"
             f"SL: {s.stop_loss:.2f}\n"
             f"{confidence_lines}"
             f"Regime: {s.regime}\n"
             f"R:R: {s.risk_reward:.2f}\n\n"
-            f"Why this strategy now:\n{why}\n\n"
-            "Research signal only; live fills/slippage can differ."
+            "Why this strategy now:\n"
         )
+        suffix = "\n\nResearch signal only; live fills/slippage can differ."
+        reasons = "\n".join(f"• {self._compact(r, 700)}" for r in s.reasons)
+        available = max(0, self.MAX_MESSAGE_CHARS - len(prefix) - len(suffix))
+        if len(reasons) > available:
+            reasons = (reasons[: max(0, available - 1)] + "…") if available else ""
+        message = prefix + reasons + suffix
+        # Defensive final cap in case unusual Unicode/string inputs exceed assumptions.
+        if len(message) > self.MAX_MESSAGE_CHARS:
+            message = message[: self.MAX_MESSAGE_CHARS]
+        return message
 
     def send(self, signal: TradeSignal) -> int:
         if not self.bot_token or not self.chat_id:
@@ -88,11 +101,6 @@ class TelegramNotifier:
             timeout=self.timeout,
         )
 
-        # A Telegram 4xx is a definitive client-side rejection (bad token/chat,
-        # malformed request, blocked bot, etc.). It is safe to release the local
-        # reservation so a corrected configuration can retry later. 5xx/network
-        # failures remain uncertain because delivery could have happened before
-        # the connection failed.
         if 400 <= response.status_code < 500:
             raise TelegramRejectedError(
                 f"Telegram rejected signal with HTTP {response.status_code}: {response.text[:300]}"
@@ -106,7 +114,5 @@ class TelegramNotifier:
             raise TelegramRejectedError(f"Telegram rejected signal: {payload}")
         message_id = payload.get("result", {}).get("message_id")
         if message_id is None:
-            # ok=true means Telegram accepted the request; missing message_id is
-            # therefore delivery-uncertain rather than a definitive rejection.
             raise RuntimeError("Telegram accepted request without a message_id")
         return int(message_id)

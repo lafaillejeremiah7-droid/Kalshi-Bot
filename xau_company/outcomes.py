@@ -31,6 +31,10 @@ class OutcomeCalibrationAgent:
     """Persist signals, synchronize delivery, resolve outcomes and calibrate confidence."""
 
     name = "Outcome & Calibration Desk"
+    _INTERVAL_MINUTES = {
+        "1min": 1, "5min": 5, "15min": 15, "30min": 30, "45min": 45,
+        "1h": 60, "2h": 120, "4h": 240, "8h": 480,
+    }
 
     def __init__(
         self,
@@ -67,6 +71,7 @@ class OutcomeCalibrationAgent:
                     signal_key TEXT NOT NULL UNIQUE,
                     observed_at TEXT NOT NULL,
                     setup_at TEXT NOT NULL DEFAULT '',
+                    setup_end_at TEXT NOT NULL DEFAULT '',
                     symbol TEXT NOT NULL,
                     direction TEXT NOT NULL,
                     entry REAL NOT NULL,
@@ -88,16 +93,14 @@ class OutcomeCalibrationAgent:
                 """
             )
             self._ensure_column(conn, "setup_at", "setup_at TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(conn, "setup_end_at", "setup_end_at TEXT NOT NULL DEFAULT ''")
             self._ensure_column(conn, "delivery_state", "delivery_state TEXT NOT NULL DEFAULT 'SENT'")
             self._ensure_column(conn, "max_holding_minutes", "max_holding_minutes INTEGER NOT NULL DEFAULT 4320")
             self._ensure_column(conn, "resolution_interval_minutes", "resolution_interval_minutes INTEGER NOT NULL DEFAULT 1")
             self._ensure_column(conn, "telegram_message_id", "telegram_message_id TEXT")
-            # A reservation left behind by a crashed process may already have been
-            # delivered externally. Treat it as UNKNOWN: suppress duplicates and
-            # daily-cap reuse, but exclude it from probability calibration.
-            conn.execute(
-                "UPDATE signal_outcomes SET delivery_state='UNKNOWN' WHERE delivery_state='RESERVED'"
-            )
+            # A crashed reservation may already have been delivered. Preserve the
+            # daily slot/dedupe identity but exclude UNKNOWN deliveries from calibration.
+            conn.execute("UPDATE signal_outcomes SET delivery_state='UNKNOWN' WHERE delivery_state='RESERVED'")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_signal_outcomes_status ON signal_outcomes(status)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_signal_outcomes_confidence ON signal_outcomes(selection_confidence)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_signal_outcomes_context ON signal_outcomes(strategy_family, regime, status)")
@@ -116,13 +119,16 @@ class OutcomeCalibrationAgent:
 
     @staticmethod
     def _family(strategy: str) -> str:
-        return strategy.split("(", 1)[0].strip() if strategy else ""
+        if not strategy:
+            return ""
+        if strategy.startswith("Invention "):
+            return "invented"
+        if strategy.startswith("Ensemble "):
+            return "ensemble"
+        return strategy.split("(", 1)[0].strip()
 
     @staticmethod
     def _signal_key(signal: TradeSignal, setup_at: str) -> str:
-        # One company authorization per symbol per completed research setup candle.
-        # A different winning strategy, direction, quote, SL or TP during the same
-        # setup candle does not create a second authorization opportunity.
         raw = "|".join([setup_at, signal.symbol])
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
@@ -132,6 +138,20 @@ class OutcomeCalibrationAgent:
         resolution = int(stats.get("resolution_interval_minutes", 1))
         return max(1, min(holding, self.max_age_hours * 60)), max(1, resolution)
 
+    def _setup_end(self, signal: TradeSignal, setup_at: datetime | pd.Timestamp | str) -> str:
+        start = pd.Timestamp(setup_at)
+        if start.tzinfo is None:
+            start = start.tz_localize("UTC")
+        else:
+            start = start.tz_convert("UTC")
+        interval = str((signal.strategy_stats or {}).get("research_interval", ""))
+        minutes = self._INTERVAL_MINUTES.get(interval)
+        if minutes is None:
+            # Legacy/tests that do not report a research interval use setup_at as
+            # their lifecycle boundary, preserving prior API behavior.
+            return self.utc_iso(start)
+        return self.utc_iso(start + pd.Timedelta(minutes=minutes))
+
     def exists(self, signal: TradeSignal, setup_at: datetime | pd.Timestamp | str) -> bool:
         setup = self.utc_iso(setup_at)
         key = self._signal_key(signal, setup)
@@ -140,27 +160,19 @@ class OutcomeCalibrationAgent:
                 """
                 SELECT 1 FROM signal_outcomes
                 WHERE (signal_key=? OR (symbol=? AND setup_at=?))
-                  AND delivery_state!='FAILED'
-                LIMIT 1
+                  AND delivery_state!='FAILED' LIMIT 1
                 """,
                 (key, signal.symbol, setup),
             ).fetchone()
         return row is not None
 
-    def count_emitted_between(
-        self,
-        start_at: datetime | pd.Timestamp | str,
-        end_at: datetime | pd.Timestamp | str,
-    ) -> int:
-        start = self.utc_iso(start_at)
-        end = self.utc_iso(end_at)
+    def count_emitted_between(self, start_at, end_at) -> int:
+        start, end = self.utc_iso(start_at), self.utc_iso(end_at)
         with self._connect() as conn:
             row = conn.execute(
-                """
-                SELECT COUNT(*) AS n FROM signal_outcomes
-                WHERE observed_at >= ? AND observed_at < ?
-                  AND delivery_state IN ('RESERVED','SENT','UNKNOWN')
-                """,
+                """SELECT COUNT(*) AS n FROM signal_outcomes
+                   WHERE observed_at >= ? AND observed_at < ?
+                     AND delivery_state IN ('RESERVED','SENT','UNKNOWN')""",
                 (start, end),
             ).fetchone()
         return int(row["n"] or 0)
@@ -168,33 +180,26 @@ class OutcomeCalibrationAgent:
     def reserve_if_under_cap(
         self,
         signal: TradeSignal,
-        observed_at: datetime | pd.Timestamp | str,
+        observed_at,
         selection_confidence: float,
-        setup_at: datetime | pd.Timestamp | str,
-        day_start: datetime | pd.Timestamp | str,
-        day_end: datetime | pd.Timestamp | str,
+        setup_at,
+        day_start,
+        day_end,
         max_per_day: int,
     ) -> ReservationResult:
-        """Atomically reserve dedupe identity and a daily signal slot."""
-        observed = self.utc_iso(observed_at)
-        setup = self.utc_iso(setup_at)
-        start = self.utc_iso(day_start)
-        end = self.utc_iso(day_end)
+        observed, setup = self.utc_iso(observed_at), self.utc_iso(setup_at)
+        setup_end = self._setup_end(signal, setup_at)
+        start, end = self.utc_iso(day_start), self.utc_iso(day_end)
         key = self._signal_key(signal, setup)
         holding, resolution = self._runtime_limits(signal)
-        raw_conf = float(selection_confidence)
-        calibrated = float(signal.confidence)
+        raw_conf, calibrated = float(selection_confidence), float(signal.confidence)
 
         conn = self._connect()
         try:
             conn.isolation_level = None
             conn.execute("BEGIN IMMEDIATE")
             duplicate = conn.execute(
-                """
-                SELECT id, delivery_state FROM signal_outcomes
-                WHERE signal_key=? OR (symbol=? AND setup_at=?)
-                LIMIT 1
-                """,
+                "SELECT id, delivery_state FROM signal_outcomes WHERE signal_key=? OR (symbol=? AND setup_at=?) LIMIT 1",
                 (key, signal.symbol, setup),
             ).fetchone()
             if duplicate is not None and duplicate["delivery_state"] != "FAILED":
@@ -204,11 +209,9 @@ class OutcomeCalibrationAgent:
                 conn.execute("DELETE FROM signal_outcomes WHERE id=?", (int(duplicate["id"]),))
 
             row = conn.execute(
-                """
-                SELECT COUNT(*) AS n FROM signal_outcomes
-                WHERE observed_at >= ? AND observed_at < ?
-                  AND delivery_state IN ('RESERVED','SENT','UNKNOWN')
-                """,
+                """SELECT COUNT(*) AS n FROM signal_outcomes
+                   WHERE observed_at >= ? AND observed_at < ?
+                     AND delivery_state IN ('RESERVED','SENT','UNKNOWN')""",
                 (start, end),
             ).fetchone()
             count = int(row["n"] or 0)
@@ -219,28 +222,17 @@ class OutcomeCalibrationAgent:
             conn.execute(
                 """
                 INSERT INTO signal_outcomes (
-                    signal_key, observed_at, setup_at, symbol, direction, entry, stop_loss,
-                    take_profit, selection_confidence, calibrated_confidence,
-                    strategy, strategy_family, regime, status, delivery_state,
-                    max_holding_minutes, resolution_interval_minutes
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', 'RESERVED', ?, ?)
+                    signal_key, observed_at, setup_at, setup_end_at, symbol, direction,
+                    entry, stop_loss, take_profit, selection_confidence,
+                    calibrated_confidence, strategy, strategy_family, regime, status,
+                    delivery_state, max_holding_minutes, resolution_interval_minutes
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', 'RESERVED', ?, ?)
                 """,
                 (
-                    key,
-                    observed,
-                    setup,
-                    signal.symbol,
-                    signal.direction.value,
-                    float(signal.entry),
-                    float(signal.stop_loss),
-                    float(signal.take_profit),
-                    raw_conf,
-                    calibrated,
-                    signal.selected_strategy or "",
-                    self._family(signal.selected_strategy),
-                    signal.regime or "",
-                    holding,
-                    resolution,
+                    key, observed, setup, setup_end, signal.symbol, signal.direction.value,
+                    float(signal.entry), float(signal.stop_loss), float(signal.take_profit),
+                    raw_conf, calibrated, signal.selected_strategy or "",
+                    self._family(signal.selected_strategy), signal.regime or "", holding, resolution,
                 ),
             )
             conn.execute("COMMIT")
@@ -254,13 +246,7 @@ class OutcomeCalibrationAgent:
         finally:
             conn.close()
 
-    def mark_delivery_state(
-        self,
-        signal: TradeSignal,
-        setup_at: datetime | pd.Timestamp | str,
-        state: str,
-        telegram_message_id: str | int | None = None,
-    ) -> None:
+    def mark_delivery_state(self, signal: TradeSignal, setup_at, state: str, telegram_message_id=None) -> None:
         allowed = {"RESERVED", "SENT", "UNKNOWN", "FAILED"}
         if state not in allowed:
             raise ValueError(f"Unknown delivery state: {state}")
@@ -268,41 +254,25 @@ class OutcomeCalibrationAgent:
         key = self._signal_key(signal, setup)
         with self._connect() as conn:
             conn.execute(
-                """
-                UPDATE signal_outcomes SET delivery_state=?, telegram_message_id=?
-                WHERE signal_key=? OR (symbol=? AND setup_at=?)
-                """,
-                (
-                    state,
-                    None if telegram_message_id is None else str(telegram_message_id),
-                    key,
-                    signal.symbol,
-                    setup,
-                ),
+                """UPDATE signal_outcomes SET delivery_state=?, telegram_message_id=?
+                   WHERE signal_key=? OR (symbol=? AND setup_at=?)""",
+                (state, None if telegram_message_id is None else str(telegram_message_id), key, signal.symbol, setup),
             )
 
-    def record(
-        self,
-        signal: TradeSignal,
-        observed_at: datetime | pd.Timestamp | str,
-        selection_confidence: float | None = None,
-        setup_at: datetime | pd.Timestamp | str | None = None,
-    ) -> bool:
-        """Record a known-emitted signal (used by paper mode and tests)."""
+    def record(self, signal: TradeSignal, observed_at, selection_confidence=None, setup_at=None) -> bool:
         observed = self.utc_iso(observed_at)
-        setup = self.utc_iso(setup_at if setup_at is not None else observed_at)
+        setup_value = setup_at if setup_at is not None else observed_at
+        setup = self.utc_iso(setup_value)
+        setup_end = self._setup_end(signal, setup_value)
         raw_conf = float(signal.confidence if selection_confidence is None else selection_confidence)
         calibrated = float(signal.confidence)
         key = self._signal_key(signal, setup)
         holding, resolution = self._runtime_limits(signal)
         with self._connect() as conn:
             duplicate = conn.execute(
-                """
-                SELECT 1 FROM signal_outcomes
-                WHERE (signal_key=? OR (symbol=? AND setup_at=?))
-                  AND delivery_state!='FAILED'
-                LIMIT 1
-                """,
+                """SELECT 1 FROM signal_outcomes
+                   WHERE (signal_key=? OR (symbol=? AND setup_at=?))
+                     AND delivery_state!='FAILED' LIMIT 1""",
                 (key, signal.symbol, setup),
             ).fetchone()
             if duplicate is not None:
@@ -310,28 +280,17 @@ class OutcomeCalibrationAgent:
             cursor = conn.execute(
                 """
                 INSERT OR IGNORE INTO signal_outcomes (
-                    signal_key, observed_at, setup_at, symbol, direction, entry, stop_loss,
-                    take_profit, selection_confidence, calibrated_confidence,
-                    strategy, strategy_family, regime, status, delivery_state,
-                    max_holding_minutes, resolution_interval_minutes
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', 'SENT', ?, ?)
+                    signal_key, observed_at, setup_at, setup_end_at, symbol, direction,
+                    entry, stop_loss, take_profit, selection_confidence,
+                    calibrated_confidence, strategy, strategy_family, regime, status,
+                    delivery_state, max_holding_minutes, resolution_interval_minutes
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', 'SENT', ?, ?)
                 """,
                 (
-                    key,
-                    observed,
-                    setup,
-                    signal.symbol,
-                    signal.direction.value,
-                    float(signal.entry),
-                    float(signal.stop_loss),
-                    float(signal.take_profit),
-                    raw_conf,
-                    calibrated,
-                    signal.selected_strategy or "",
-                    self._family(signal.selected_strategy),
-                    signal.regime or "",
-                    holding,
-                    resolution,
+                    key, observed, setup, setup_end, signal.symbol, signal.direction.value,
+                    float(signal.entry), float(signal.stop_loss), float(signal.take_profit),
+                    raw_conf, calibrated, signal.selected_strategy or "",
+                    self._family(signal.selected_strategy), signal.regime or "", holding, resolution,
                 ),
             )
             return cursor.rowcount > 0
@@ -339,24 +298,24 @@ class OutcomeCalibrationAgent:
     def oldest_unresolved_observed_at(self) -> pd.Timestamp | None:
         with self._connect() as conn:
             row = conn.execute(
-                """
-                SELECT MIN(observed_at) AS oldest FROM signal_outcomes
-                WHERE status='OPEN' AND delivery_state IN ('RESERVED','SENT','UNKNOWN')
-                """
+                """SELECT MIN(observed_at) AS oldest FROM signal_outcomes
+                   WHERE status='OPEN' AND delivery_state IN ('RESERVED','SENT','UNKNOWN')"""
             ).fetchone()
         return pd.Timestamp(row["oldest"]) if row and row["oldest"] else None
 
     def resolve_open(self, df: pd.DataFrame, interval_minutes: int = 1) -> dict[str, int]:
-        """Resolve open signals without pretending partial pre-emission bars are known."""
+        """Resolve TP/SL and research-horizon timeout using completed market bars."""
         counts = {"wins": 0, "losses": 0, "expired": 0, "ambiguous": 0}
         if df is None or df.empty or not {"datetime", "high", "low"}.issubset(df.columns):
             return counts
 
-        candles = df[["datetime", "high", "low"]].copy()
+        columns = ["datetime", "high", "low"] + (["close"] if "close" in df.columns else [])
+        candles = df[columns].copy()
         candles["datetime"] = pd.to_datetime(candles["datetime"], utc=True, errors="coerce")
-        candles["high"] = pd.to_numeric(candles["high"], errors="coerce")
-        candles["low"] = pd.to_numeric(candles["low"], errors="coerce")
-        candles = candles.dropna().sort_values("datetime")
+        for column in ("high", "low", "close"):
+            if column in candles:
+                candles[column] = pd.to_numeric(candles[column], errors="coerce")
+        candles = candles.dropna(subset=["datetime", "high", "low"]).sort_values("datetime")
         if candles.empty:
             return counts
 
@@ -364,37 +323,38 @@ class OutcomeCalibrationAgent:
         latest_end = candles["datetime"].iloc[-1] + delta
         with self._connect() as conn:
             rows = conn.execute(
-                """
-                SELECT * FROM signal_outcomes
-                WHERE status='OPEN' AND delivery_state IN ('SENT','UNKNOWN')
-                ORDER BY observed_at
-                """
+                """SELECT * FROM signal_outcomes
+                   WHERE status='OPEN' AND delivery_state IN ('SENT','UNKNOWN')
+                   ORDER BY observed_at"""
             ).fetchall()
 
             for row in rows:
                 observed = pd.Timestamp(row["observed_at"])
-                if observed.tzinfo is None:
-                    observed = observed.tz_localize("UTC")
+                observed = observed.tz_localize("UTC") if observed.tzinfo is None else observed.tz_convert("UTC")
+                holding = min(max(1, int(row["max_holding_minutes"] or self.max_age_hours * 60)), self.max_age_hours * 60)
+
+                setup_end_raw = row["setup_end_at"] if "setup_end_at" in row.keys() else ""
+                if setup_end_raw:
+                    lifecycle_start = pd.Timestamp(setup_end_raw)
+                    lifecycle_start = lifecycle_start.tz_localize("UTC") if lifecycle_start.tzinfo is None else lifecycle_start.tz_convert("UTC")
                 else:
-                    observed = observed.tz_convert("UTC")
-                holding_minutes = min(
-                    max(1, int(row["max_holding_minutes"] or self.max_age_hours * 60)),
-                    self.max_age_hours * 60,
-                )
-                expiry = observed + pd.Timedelta(minutes=holding_minutes)
+                    # Legacy rows used send-time anchoring; preserve that instead of
+                    # inventing a research interval that was never persisted.
+                    lifecycle_start = observed
+                expiry = lifecycle_start + pd.Timedelta(minutes=holding)
+
                 relevant = candles[
                     (candles["datetime"] + delta > observed)
                     & (candles["datetime"] < expiry)
                 ]
-                resolved_status: str | None = None
-                resolved_at: str | None = None
-                resolved_price: float | None = None
+                resolved_status = None
+                resolved_at = None
+                resolved_price = None
 
                 for candle in relevant.itertuples(index=False):
                     candle_start = pd.Timestamp(candle.datetime)
                     candle_end = candle_start + delta
-                    high = float(candle.high)
-                    low = float(candle.low)
+                    high, low = float(candle.high), float(candle.low)
                     if row["direction"] == Direction.BUY.value:
                         stop_hit = low <= float(row["stop_loss"])
                         target_hit = high >= float(row["take_profit"])
@@ -404,37 +364,50 @@ class OutcomeCalibrationAgent:
 
                     overlaps_emission = candle_start < observed < candle_end
                     if overlaps_emission and (stop_hit or target_hit):
-                        resolved_status = "AMBIGUOUS"
-                        resolved_at = self.utc_iso(candle_start)
+                        resolved_status, resolved_at = "AMBIGUOUS", self.utc_iso(candle_start)
                         counts["ambiguous"] += 1
                         break
                     if overlaps_emission:
                         continue
+                    # Match research's conservative same-bar ordering: stop first.
                     if stop_hit:
-                        resolved_status = "LOSS"
-                        resolved_at = self.utc_iso(candle_start)
+                        resolved_status, resolved_at = "LOSS", self.utc_iso(candle_start)
                         resolved_price = float(row["stop_loss"])
                         counts["losses"] += 1
                         break
                     if target_hit:
-                        resolved_status = "WIN"
-                        resolved_at = self.utc_iso(candle_start)
+                        resolved_status, resolved_at = "WIN", self.utc_iso(candle_start)
                         resolved_price = float(row["take_profit"])
                         counts["wins"] += 1
                         break
 
                 if resolved_status is None and latest_end >= expiry:
-                    resolved_status = "EXPIRED"
-                    resolved_at = self.utc_iso(expiry)
-                    counts["expired"] += 1
+                    complete = candles[
+                        (candles["datetime"] + delta > observed)
+                        & (candles["datetime"] + delta <= expiry)
+                    ]
+                    if "close" in complete.columns:
+                        complete = complete.dropna(subset=["close"])
+                    if "close" in complete.columns and not complete.empty:
+                        timeout_price = float(complete["close"].iloc[-1])
+                        pnl = (
+                            timeout_price - float(row["entry"])
+                            if row["direction"] == Direction.BUY.value
+                            else float(row["entry"]) - timeout_price
+                        )
+                        resolved_status = "WIN" if pnl > 0 else "LOSS"
+                        resolved_at = self.utc_iso(expiry)
+                        resolved_price = timeout_price
+                        counts["wins" if pnl > 0 else "losses"] += 1
+                    else:
+                        resolved_status = "EXPIRED"
+                        resolved_at = self.utc_iso(expiry)
+                        counts["expired"] += 1
 
                 if resolved_status is not None:
                     conn.execute(
-                        """
-                        UPDATE signal_outcomes
-                        SET status=?, resolved_at=?, resolved_price=?
-                        WHERE id=? AND status='OPEN'
-                        """,
+                        """UPDATE signal_outcomes SET status=?, resolved_at=?, resolved_price=?
+                           WHERE id=? AND status='OPEN'""",
                         (resolved_status, resolved_at, resolved_price, int(row["id"])),
                     )
         return counts
@@ -442,21 +415,12 @@ class OutcomeCalibrationAgent:
     def _bucket_bounds(self, probability: float) -> tuple[float, float]:
         p = float(np.clip(probability, 0.0, 0.999999))
         lower = np.floor(p / self.bin_width) * self.bin_width
-        upper = min(1.000001, lower + self.bin_width)
-        return float(lower), float(upper)
+        return float(lower), float(min(1.000001, lower + self.bin_width))
 
-    def _resolved_stats(
-        self,
-        lower: float,
-        upper: float,
-        strategy_family: str = "",
-        regime: str = "",
-    ) -> tuple[int, int]:
+    def _resolved_stats(self, lower: float, upper: float, strategy_family: str = "", regime: str = "") -> tuple[int, int]:
         where = [
-            "status IN ('WIN','LOSS')",
-            "delivery_state='SENT'",
-            "selection_confidence >= ?",
-            "selection_confidence < ?",
+            "status IN ('WIN','LOSS')", "delivery_state='SENT'",
+            "selection_confidence >= ?", "selection_confidence < ?",
         ]
         params: list[object] = [lower, upper]
         if strategy_family:
@@ -473,18 +437,15 @@ class OutcomeCalibrationAgent:
     def _brier_score(self) -> float | None:
         with self._connect() as conn:
             rows = conn.execute(
-                """
-                SELECT calibrated_confidence, status FROM signal_outcomes
-                WHERE status IN ('WIN','LOSS') AND delivery_state='SENT'
-                """
+                """SELECT calibrated_confidence, status FROM signal_outcomes
+                   WHERE status IN ('WIN','LOSS') AND delivery_state='SENT'"""
             ).fetchall()
         if not rows:
             return None
-        errors = []
-        for row in rows:
-            outcome = 1.0 if row["status"] == "WIN" else 0.0
-            errors.append((float(row["calibrated_confidence"]) - outcome) ** 2)
-        return float(np.mean(errors))
+        return float(np.mean([
+            (float(row["calibrated_confidence"]) - (1.0 if row["status"] == "WIN" else 0.0)) ** 2
+            for row in rows
+        ]))
 
     def calibrate(self, probability: float, strategy: str = "", regime: str = "") -> CalibrationResult:
         raw = float(np.clip(probability, 0.01, 0.99))
@@ -496,19 +457,14 @@ class OutcomeCalibrationAgent:
         global_posterior = (wins + raw * self.prior_strength) / (n + self.prior_strength)
         posterior = global_posterior
         used_n, used_wins = n, wins
-
         family = self._family(strategy)
         context_n, context_wins = self._resolved_stats(lower, upper, family, regime)
         if context_n >= 8 and (family or regime):
-            context_posterior = (context_wins + raw * self.prior_strength) / (
-                context_n + self.prior_strength
-            )
+            context_posterior = (context_wins + raw * self.prior_strength) / (context_n + self.prior_strength)
             context_weight = min(0.65, context_n / (context_n + 20.0))
             posterior = global_posterior * (1.0 - context_weight) + context_posterior * context_weight
             used_n, used_wins = context_n, context_wins
-
-        calibrated = float(np.clip(posterior, 0.05, 0.95))
-        return CalibrationResult(calibrated, used_n, used_wins, self._brier_score())
+        return CalibrationResult(float(np.clip(posterior, 0.05, 0.95)), used_n, used_wins, self._brier_score())
 
     def summary(self) -> dict[str, float | int | None]:
         with self._connect() as conn:
@@ -524,8 +480,7 @@ class OutcomeCalibrationAgent:
                 FROM signal_outcomes
                 """
             ).fetchone()
-        wins = int(row["wins"] or 0)
-        losses = int(row["losses"] or 0)
+        wins, losses = int(row["wins"] or 0), int(row["losses"] or 0)
         resolved = wins + losses
         return {
             "total": int(row["total"] or 0),

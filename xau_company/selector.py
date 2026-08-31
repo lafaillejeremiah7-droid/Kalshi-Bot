@@ -26,8 +26,27 @@ class StrategyPick:
 
     @property
     def label(self) -> str:
-        params = ", ".join(str(x) for x in self.score.candidate.params)
-        return f"{self.score.candidate.family}({params})"
+        candidate = self.score.candidate
+        if candidate.family == "invented":
+            try:
+                family_id, variant_id, logic, feature_specs, gate_spec = candidate.params
+                features = "+".join(str(spec[0]).replace("_", " ") for spec in feature_specs)
+                gate = str(gate_spec[0]).replace("_", " ")
+                return f"Invention {family_id} v{variant_id}: {features} | {gate} | {logic}"
+            except (TypeError, ValueError, IndexError):
+                return "Invented strategy"
+        if candidate.family == "ensemble":
+            try:
+                family_a, params_a, family_b, params_b, mode = candidate.params
+                def parent_label(family, params):
+                    if family == "invented" and params:
+                        return f"{params[0]}v{params[1]}"
+                    return str(family)
+                return f"Ensemble {parent_label(family_a, params_a)} + {parent_label(family_b, params_b)} | {mode}"
+            except (TypeError, ValueError, IndexError):
+                return "Ensemble strategy"
+        params = ", ".join(str(x) for x in candidate.params)
+        return f"{candidate.family}({params})"
 
 
 class StrategySelectorAgent:
@@ -80,9 +99,6 @@ class StrategySelectorAgent:
 
     @staticmethod
     def _oos_sample_size(result: CandidateScore) -> int:
-        # Every walk-forward OOS trade is assigned exactly one historical regime.
-        # Synthetic/legacy CandidateScore objects may not include regime buckets,
-        # so retain a conservative compatibility fallback for those only.
         regime_total = sum(max(0, int(n)) for n in result.regime_trades.values())
         return regime_total if regime_total > 0 else max(0, int(result.trades))
 

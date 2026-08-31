@@ -38,6 +38,11 @@ class Settings:
     strategy_library_path: str = os.getenv("STRATEGY_LIBRARY_PATH", "data/discovered_strategies.json")
     discoveries_per_cycle: int = int(os.getenv("DISCOVERIES_PER_CYCLE", "250"))
     discovery_library_size: int = int(os.getenv("DISCOVERY_LIBRARY_SIZE", "5000"))
+    enable_strategy_invention: bool = _bool("ENABLE_STRATEGY_INVENTION", True)
+    invention_library_path: str = os.getenv("INVENTION_LIBRARY_PATH", "data/invented_strategies.json")
+    invented_families_per_cycle: int = int(os.getenv("INVENTED_FAMILIES_PER_CYCLE", "6"))
+    invented_variants_per_family: int = int(os.getenv("INVENTED_VARIANTS_PER_FAMILY", "8"))
+    invention_library_size: int = int(os.getenv("INVENTION_LIBRARY_SIZE", "4000"))
     overfit_min_adjusted_score: float = float(os.getenv("OVERFIT_MIN_ADJUSTED_SCORE", "0.60"))
     overfit_min_profit_factor: float = float(os.getenv("OVERFIT_MIN_PROFIT_FACTOR", "1.15"))
     overfit_min_avg_r: float = float(os.getenv("OVERFIT_MIN_AVG_R", "0.05"))
@@ -74,14 +79,10 @@ class Settings:
         if not self.twelve_data_api_key:
             raise RuntimeError("TWELVE_DATA_API_KEY is required")
         if not self.paper_mode and (not self.telegram_bot_token or not self.telegram_chat_id):
-            raise RuntimeError(
-                "TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are required when PAPER_MODE=false"
-            )
+            raise RuntimeError("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are required when PAPER_MODE=false")
         if not 0.5 <= self.min_confidence <= 0.99:
             raise ValueError("MIN_CONFIDENCE must be between 0.50 and 0.99")
-        # The selector intentionally counts only the six directional specialist
-        # desks here; timeframe/macro/veto desks are scored separately so they are
-        # not double-counted as consensus votes.
+        # Selector consensus intentionally counts only six directional specialist desks.
         if not 1 <= self.min_consensus <= 6:
             raise ValueError("MIN_CONSENSUS must be between 1 and 6")
         if self.output_size < 300:
@@ -104,6 +105,14 @@ class Settings:
             raise ValueError("DISCOVERIES_PER_CYCLE cannot be negative")
         if self.discovery_library_size < 100:
             raise ValueError("DISCOVERY_LIBRARY_SIZE must be at least 100")
+        if not 0 <= self.invented_families_per_cycle <= 50:
+            raise ValueError("INVENTED_FAMILIES_PER_CYCLE must be between 0 and 50")
+        if not 1 <= self.invented_variants_per_family <= 64:
+            raise ValueError("INVENTED_VARIANTS_PER_FAMILY must be between 1 and 64")
+        if self.invention_library_size < 100:
+            raise ValueError("INVENTION_LIBRARY_SIZE must be at least 100")
+        if self.enable_strategy_invention and self.invention_library_size < self.invented_variants_per_family:
+            raise ValueError("INVENTION_LIBRARY_SIZE must fit at least one invented family")
         if not 0.0 <= self.overfit_min_adjusted_score <= 1.0:
             raise ValueError("OVERFIT_MIN_ADJUSTED_SCORE must be between 0 and 1")
         if self.overfit_min_profit_factor < 1.0:

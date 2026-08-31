@@ -35,31 +35,42 @@ def _read_state(path: Path) -> dict[str, Any]:
 
 
 def _read_performance(db_path: Path) -> dict[str, Any] | None:
+    """Read the real signal_outcomes ledger, with legacy table compatibility."""
     if not db_path.exists():
         return None
     try:
         conn = sqlite3.connect(str(db_path), timeout=1.0)
         conn.row_factory = sqlite3.Row
-        columns = {row[1] for row in conn.execute("PRAGMA table_info(outcomes)").fetchall()}
-        if not columns:
+        tables = {
+            row[0] for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        if "signal_outcomes" in tables:
+            table = "signal_outcomes"
+            sl_col, tp_col = "stop_loss", "take_profit"
+        elif "outcomes" in tables:  # compatibility with the first dashboard prototype
+            table = "outcomes"
+            sl_col, tp_col = "sl", "tp"
+        else:
             conn.close()
             return None
 
-        signal_count = int(conn.execute("SELECT COUNT(*) FROM outcomes").fetchone()[0])
+        signal_count = int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
         rows = conn.execute(
-            """
-            SELECT observed_at, direction, entry, sl, tp, calibrated_confidence,
+            f"""
+            SELECT observed_at, direction, entry, {sl_col} AS stop_loss,
+                   {tp_col} AS take_profit, calibrated_confidence,
                    strategy, regime, status, delivery_state, telegram_message_id
-            FROM outcomes
+            FROM {table}
             ORDER BY observed_at DESC
             LIMIT 8
             """
         ).fetchall()
-
         resolved = conn.execute(
-            """
+            f"""
             SELECT status, calibrated_confidence
-            FROM outcomes
+            FROM {table}
             WHERE delivery_state='SENT' AND status IN ('WIN', 'LOSS')
             """
         ).fetchall()
@@ -76,24 +87,22 @@ def _read_performance(db_path: Path) -> dict[str, Any] | None:
             outcome = 1.0 if row["status"] == "WIN" else 0.0
             brier_values.append((probability - outcome) ** 2)
 
-        recent = []
-        for row in rows:
-            recent.append(
-                {
-                    "observed_at": row["observed_at"],
-                    "direction": row["direction"],
-                    "entry": _float(row["entry"]),
-                    "stop_loss": _float(row["sl"]),
-                    "take_profit": _float(row["tp"]),
-                    "confidence": _float(row["calibrated_confidence"]),
-                    "strategy": row["strategy"],
-                    "regime": row["regime"],
-                    "status": row["status"],
-                    "delivery_state": row["delivery_state"],
-                    "message_id": row["telegram_message_id"],
-                }
-            )
-
+        recent = [
+            {
+                "observed_at": row["observed_at"],
+                "direction": row["direction"],
+                "entry": _float(row["entry"]),
+                "stop_loss": _float(row["stop_loss"]),
+                "take_profit": _float(row["take_profit"]),
+                "confidence": _float(row["calibrated_confidence"]),
+                "strategy": row["strategy"],
+                "regime": row["regime"],
+                "status": row["status"],
+                "delivery_state": row["delivery_state"],
+                "message_id": row["telegram_message_id"],
+            }
+            for row in rows
+        ]
         return {
             "signals": signal_count,
             "resolved": total,

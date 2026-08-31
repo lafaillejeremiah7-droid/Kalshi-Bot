@@ -13,6 +13,7 @@ from xau_company.frequency import TradeFrequencyGuard
 from xau_company.orchestrator import BossAgent
 from xau_company.outcomes import OutcomeCalibrationAgent
 from xau_company.quality import MarketDataQualityAgent
+from xau_company.runtime_quality import fetch_resolution_history, revalidate_optional_macro
 from xau_company.telegram import TelegramNotifier, TelegramRejectedError
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -35,24 +36,10 @@ def _frame_timestamp(frame: pd.DataFrame | None):
     return datetime.now(timezone.utc)
 
 
-def _clean_optional_macro(
-    quality: MarketDataQualityAgent,
-    frame: pd.DataFrame | None,
-    interval: str,
-    now: datetime,
-) -> pd.DataFrame | None:
-    if frame is None or frame.empty:
-        return None
-    cleaned, report = quality.clean_frame(frame, interval, now=now, require_fresh=True)
-    return cleaned if report.ok else None
-
-
 def run() -> None:
     cfg = Settings()
     cfg.validate()
     market = TwelveDataClient(cfg.twelve_data_api_key)
-    # XAU/USD market-session hours are anchored to Chicago regardless of the
-    # user's preferred accounting timezone for the daily signal cap.
     quality = MarketDataQualityAgent(
         max_stale_multiplier=cfg.max_stale_multiplier,
         timezone_name="America/Chicago",
@@ -70,6 +57,11 @@ def run() -> None:
         strategy_library_path=cfg.strategy_library_path,
         discoveries_per_cycle=cfg.discoveries_per_cycle,
         discovery_library_size=cfg.discovery_library_size,
+        enable_invention=cfg.enable_strategy_invention,
+        invention_library_path=cfg.invention_library_path,
+        invented_families_per_cycle=cfg.invented_families_per_cycle,
+        invented_variants_per_family=cfg.invented_variants_per_family,
+        invention_library_size=cfg.invention_library_size,
         overfit_min_adjusted_score=cfg.overfit_min_adjusted_score,
         overfit_min_profit_factor=cfg.overfit_min_profit_factor,
         overfit_min_avg_r=cfg.overfit_min_avg_r,
@@ -101,8 +93,8 @@ def run() -> None:
 
     cycle = 0
     last_research_success: int | None = None
-    dxy = None
-    yields = None
+    dxy: pd.DataFrame | None = None
+    yields: pd.DataFrame | None = None
 
     while True:
         try:
@@ -136,34 +128,31 @@ def run() -> None:
             research_live_df = frames.get(cfg.research_interval)
             signal_setup_at = _frame_timestamp(research_live_df)
 
-            # Always fetch enough completed 1-minute history to cover the maximum
-            # persisted forward-outcome window after a long process outage.
-            resolution_size = min(
-                5000,
-                max(cfg.context_output_size, cfg.outcome_max_age_hours * 60 + 120),
+            # Resolve forward outcomes from the finest healthy feed available.
+            # A 5m fallback prevents calibration from freezing when 1m is unavailable.
+            resolution_df, resolution_minutes, resolution_interval = fetch_resolution_history(
+                market,
+                quality,
+                cfg.symbol,
+                cfg.outcome_max_age_hours,
+                cfg.context_output_size,
+                now,
             )
-            raw_resolution = market.safe_candles(cfg.symbol, "1min", resolution_size)
-            if raw_resolution is not None:
-                resolution_df, resolution_report = quality.clean_frame(
-                    raw_resolution,
-                    "1min",
-                    now=now,
-                    require_fresh=True,
-                )
-                if resolution_report.ok:
-                    resolved = outcomes.resolve_open(resolution_df, interval_minutes=1)
-                    if sum(resolved.values()):
-                        summary = outcomes.summary()
-                        log.info(
-                            "Outcome desk resolved wins=%s losses=%s expired=%s ambiguous=%s total_resolved=%s forward_win_rate=%s brier=%s",
-                            resolved["wins"],
-                            resolved["losses"],
-                            resolved["expired"],
-                            resolved["ambiguous"],
-                            summary["resolved"],
-                            f"{summary['win_rate']:.1%}" if isinstance(summary["win_rate"], float) else "n/a",
-                            f"{summary['brier_score']:.4f}" if isinstance(summary["brier_score"], float) else "n/a",
-                        )
+            if resolution_df is not None and resolution_minutes is not None:
+                resolved = outcomes.resolve_open(resolution_df, interval_minutes=resolution_minutes)
+                if sum(resolved.values()):
+                    summary = outcomes.summary()
+                    log.info(
+                        "Outcome desk resolved interval=%s wins=%s losses=%s expired=%s ambiguous=%s total_resolved=%s forward_win_rate=%s brier=%s",
+                        resolution_interval,
+                        resolved["wins"],
+                        resolved["losses"],
+                        resolved["expired"],
+                        resolved["ambiguous"],
+                        summary["resolved"],
+                        f"{summary['win_rate']:.1%}" if isinstance(summary["win_rate"], float) else "n/a",
+                        f"{summary['brier_score']:.4f}" if isinstance(summary["brier_score"], float) else "n/a",
+                    )
 
             research_due = (
                 last_research_success is None
@@ -185,39 +174,46 @@ def run() -> None:
                 top = lab.run(research_df)
                 last_research_success = cycle
                 log.info(
-                    "Strategy lab universe=%s evaluated=%s lifetime_trials=%s live_catalog=%s experimental_catalog=%s top=%s dynamic_library=%s discovered=%s promoted=%s quarantined=%s walk_forward_folds=%s spread_bps=%.2f slippage_bps=%.2f",
+                    "Strategy lab universe=%s evaluated=%s lifetime_trials=%s live_catalog=%s experimental_catalog=%s invented_catalog=%s top=%s dynamic_library=%s invention_library=%s discovered=%s promoted=%s quarantined=%s invented_new_families=%s invented_new_variants=%s invention_promoted=%s invention_quarantined=%s invented_family_total=%s invented_family_promoted=%s walk_forward_folds=%s spread_bps=%.2f slippage_bps=%.2f",
                     lab.last_universe_size,
                     lab.last_evaluated,
                     lab.last_lifetime_trials,
                     len(lab.catalog),
                     lab.last_experimental_catalog_size,
+                    lab.last_invented_catalog_size,
                     len(top),
                     lab.dynamic_library_size,
+                    lab.invention_library_size,
                     lab.last_discovered,
                     lab.last_promoted,
                     lab.last_quarantined,
+                    lab.last_invented_families,
+                    lab.last_invented_variants,
+                    lab.last_invention_promoted,
+                    lab.last_invention_quarantined,
+                    lab.invention_family_count,
+                    lab.invention_promoted_family_count,
                     lab.walk_forward_folds,
                     cfg.spread_bps,
                     cfg.slippage_bps,
                 )
 
+            # Macro API calls are rate-limited to every five cycles, but cached
+            # frames are revalidated for freshness on every decision below.
             if cycle == 0 or cycle % 5 == 0:
-                dxy = _clean_optional_macro(
+                dxy = revalidate_optional_macro(
                     quality,
                     market.safe_candles(cfg.dxy_symbol, cfg.macro_interval, cfg.context_output_size),
                     cfg.macro_interval,
                     now,
                 )
-                yields = _clean_optional_macro(
+                yields = revalidate_optional_macro(
                     quality,
                     market.safe_candles(cfg.yield_symbol, cfg.macro_interval, cfg.context_output_size),
                     cfg.macro_interval,
                     now,
                 )
 
-            # The research backtest acts on a signal immediately after a completed
-            # research candle. Refuse a Telegram authorization if runtime work has
-            # delayed us too far beyond that same candle close.
             decision_now = pd.Timestamp(datetime.now(timezone.utc))
             setup_start = pd.Timestamp(signal_setup_at)
             if setup_start.tzinfo is None:
@@ -248,11 +244,15 @@ def run() -> None:
                 time.sleep(cfg.poll_seconds)
                 continue
 
+            # Cached context must still be fresh now, not merely when it was fetched.
+            dxy_for_decision = revalidate_optional_macro(quality, dxy, cfg.macro_interval, decision_now)
+            yields_for_decision = revalidate_optional_macro(quality, yields, cfg.macro_interval, decision_now)
+
             signal = boss.decide(
                 cfg.symbol,
                 frames,
-                dxy=dxy,
-                yield_df=yields,
+                dxy=dxy_for_decision,
+                yield_df=yields_for_decision,
                 entry_price=live_price,
             )
             if signal:
@@ -271,6 +271,7 @@ def run() -> None:
                         "calibration_wins": calibration.wins,
                         "calibration_brier_score": calibration.brier_score,
                         "setup_candle_start": OutcomeCalibrationAgent.utc_iso(signal_setup_at),
+                        "setup_candle_end": OutcomeCalibrationAgent.utc_iso(setup_end),
                         "signal_delay_seconds": max(0.0, signal_delay.total_seconds()),
                     }
                 )
@@ -285,19 +286,9 @@ def run() -> None:
                     )
                 else:
                     emitted_at = datetime.now(timezone.utc)
-                    # Research holding horizons start at the completed setup-candle
-                    # boundary, not when Telegram happens to be sent. Reduce the
-                    # remaining forward window by decision latency so outcome
-                    # calibration uses the same lifecycle horizon as research.
-                    original_holding = int(signal.strategy_stats.get("max_holding_minutes", 1))
-                    emitted_delay_minutes = max(
-                        0.0,
-                        (pd.Timestamp(emitted_at) - setup_end).total_seconds() / 60.0,
-                    )
-                    remaining_holding = max(1, int(original_holding - emitted_delay_minutes))
-                    signal.strategy_stats["max_holding_minutes_research"] = original_holding
-                    signal.strategy_stats["max_holding_minutes"] = remaining_holding
-
+                    # Keep the original research holding horizon intact. The outcome
+                    # ledger anchors it to setup_candle_end, so send latency no longer
+                    # shifts the timeout window later than the backtest.
                     day_start, day_end = frequency.day_bounds_utc(emitted_at)
                     trades_today = outcomes.count_emitted_between(day_start, day_end)
                     frequency_decision = frequency.evaluate(emitted_at, trades_today)
@@ -349,29 +340,16 @@ def run() -> None:
                                 try:
                                     message_id = telegram.send(signal)
                                 except TelegramRejectedError:
-                                    # A definitive Telegram rejection did not send
-                                    # anything externally, so release the reservation
-                                    # and allow a corrected configuration to retry.
                                     outcomes.mark_delivery_state(signal, signal_setup_at, "FAILED")
                                     raise
                                 except Exception:
-                                    # Network/5xx/accepted-without-id failures can be
-                                    # delivery-ambiguous. Keep the slot and suppress
-                                    # duplicates rather than risk sending twice.
                                     outcomes.mark_delivery_state(signal, signal_setup_at, "UNKNOWN")
                                     raise
                                 else:
-                                    outcomes.mark_delivery_state(
-                                        signal,
-                                        signal_setup_at,
-                                        "SENT",
-                                        message_id,
-                                    )
+                                    outcomes.mark_delivery_state(signal, signal_setup_at, "SENT", message_id)
             else:
                 log.info("No strategy passed research + market-context + risk thresholds")
         except Exception:
-            # A failed research refresh leaves last_research_success unchanged, so
-            # the next cycle retries immediately rather than waiting a full period.
             log.exception("Cycle failed")
         cycle += 1
         time.sleep(cfg.poll_seconds)

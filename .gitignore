@@ -13,3 +13,8 @@ data/discovered_strategies.json.tmp
 data/discovered_strategies.json.meta.json
 data/discovered_strategies.json.meta.json.tmp
 data/discovered_strategies.json.lock
+data/invented_strategies.json
+data/invented_strategies.json.tmp
+data/invented_strategies.json.meta.json
+data/invented_strategies.json.meta.json.tmp
+data/invented_strategies.json.lock
