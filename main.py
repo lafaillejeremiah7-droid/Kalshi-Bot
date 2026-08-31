@@ -51,6 +51,14 @@ def run() -> None:
         strategy_library_path=cfg.strategy_library_path,
         discoveries_per_cycle=cfg.discoveries_per_cycle,
         discovery_library_size=cfg.discovery_library_size,
+        overfit_min_adjusted_score=cfg.overfit_min_adjusted_score,
+        overfit_min_profit_factor=cfg.overfit_min_profit_factor,
+        overfit_min_avg_r=cfg.overfit_min_avg_r,
+        overfit_min_trades=cfg.overfit_min_trades,
+        overfit_max_walk_forward_std=cfg.overfit_max_walk_forward_std,
+        overfit_max_train_valid_gap=cfg.overfit_max_train_valid_gap,
+        overfit_max_drawdown_r=cfg.overfit_max_drawdown_r,
+        overfit_max_loss_streak=cfg.overfit_max_loss_streak,
     )
     outcomes = OutcomeCalibrationAgent(
         db_path=cfg.outcome_db_path,
@@ -105,14 +113,16 @@ def run() -> None:
                 frames[cfg.research_interval] = research_df
                 top = lab.run(research_df)
                 log.info(
-                    "Strategy lab universe=%s evaluated=%s robust_catalog=%s top=%s dynamic_library=%s discovered=%s promoted=%s walk_forward_folds=%s spread_bps=%.2f slippage_bps=%.2f",
+                    "Strategy lab universe=%s evaluated=%s live_catalog=%s experimental_catalog=%s top=%s dynamic_library=%s discovered=%s promoted=%s quarantined=%s walk_forward_folds=%s spread_bps=%.2f slippage_bps=%.2f",
                     lab.last_universe_size,
                     lab.last_evaluated,
                     len(lab.catalog),
+                    lab.last_experimental_catalog_size,
                     len(top),
                     lab.dynamic_library_size,
                     lab.last_discovered,
                     lab.last_promoted,
+                    lab.last_quarantined,
                     lab.walk_forward_folds,
                     cfg.spread_bps,
                     cfg.slippage_bps,
