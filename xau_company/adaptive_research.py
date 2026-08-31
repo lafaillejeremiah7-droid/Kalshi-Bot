@@ -44,20 +44,17 @@ class AdaptiveStrategyResearchAgent(StrategyResearchAgent):
             max_train_valid_gap=overfit_max_train_valid_gap,
             max_drawdown_r=overfit_max_drawdown_r,
             max_loss_streak=overfit_max_loss_streak,
-            min_folds=max(3, self.min_walk_forward_folds),
+            min_folds=self.min_walk_forward_folds,
         )
         self.last_discovered = 0
         self.last_promoted = 0
         self.last_quarantined = 0
         self.last_experimental_catalog_size = 0
+        self.last_lifetime_trials = self.evolution.tested_trials_lifetime()
         self.dynamic_library_size = self.evolution.size()
 
     def candidates(self):
-        # The original 27k+ universe remains the stable seed set.
         yield from super().candidates()
-
-        # Then append persistent discoveries. The universe therefore grows over
-        # time rather than being hard-coded to the seed grids forever.
         seen: set[Candidate] = set()
         for family, params in self.evolution.candidate_specs():
             candidate = Candidate(family, params)
@@ -120,8 +117,6 @@ class AdaptiveStrategyResearchAgent(StrategyResearchAgent):
         }
 
     def run(self, df: pd.DataFrame) -> list[CandidateScore]:
-        # Base research may evaluate experimental entries, but the resulting
-        # catalog is treated as a research-only staging area until audit completes.
         super().run(df)
         research_catalog = list(self.catalog)
         self.last_experimental_catalog_size = sum(
@@ -133,25 +128,21 @@ class AdaptiveStrategyResearchAgent(StrategyResearchAgent):
             self.last_promoted = 0
             self.last_quarantined = 0
             self.dynamic_library_size = self.evolution.size()
-            # Evolution disabled means no dynamically discovered strategy may leak
-            # into live selection even if an old library file exists.
             seed_only = [r for r in research_catalog if r.candidate.family != "ensemble"]
             self.catalog = self._build_catalog(seed_only)
             self.top = self.catalog[:25]
             return self.top
 
+        # Persist cumulative tested variants so the overfit penalty grows with the
+        # lifetime search rather than resetting to MAX_CANDIDATES every cycle.
+        self.last_lifetime_trials = self.evolution.increment_tested_trials(self.last_evaluated)
         self.last_promoted, self.last_quarantined = self.evolution.audit_promotions(
             research_catalog,
             self.overfit_auditor,
-            tested_trials=max(1, self.last_evaluated),
+            tested_trials=max(1, self.last_lifetime_trials),
         )
 
-        # Rebuild the Boss-visible catalog after audit. EXPERIMENTAL and
-        # QUARANTINED strategies stay available to research but cannot trade.
         self._refresh_live_catalog(research_catalog)
-
-        # New experiments are generated only from the currently live-eligible
-        # robust catalog and are not evaluated until a later research cycle.
         self.last_discovered = self.evolution.propose(self.catalog)
         self.dynamic_library_size = self.evolution.size()
         return self.top
