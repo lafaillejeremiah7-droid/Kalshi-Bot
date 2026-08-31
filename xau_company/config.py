@@ -40,6 +40,14 @@ class Settings:
     )
     discoveries_per_cycle: int = int(os.getenv("DISCOVERIES_PER_CYCLE", "250"))
     discovery_library_size: int = int(os.getenv("DISCOVERY_LIBRARY_SIZE", "5000"))
+    overfit_min_adjusted_score: float = float(os.getenv("OVERFIT_MIN_ADJUSTED_SCORE", "0.60"))
+    overfit_min_profit_factor: float = float(os.getenv("OVERFIT_MIN_PROFIT_FACTOR", "1.15"))
+    overfit_min_avg_r: float = float(os.getenv("OVERFIT_MIN_AVG_R", "0.05"))
+    overfit_min_trades: int = int(os.getenv("OVERFIT_MIN_TRADES", "40"))
+    overfit_max_walk_forward_std: float = float(os.getenv("OVERFIT_MAX_WF_STD", "0.12"))
+    overfit_max_train_valid_gap: float = float(os.getenv("OVERFIT_MAX_TRAIN_VALID_GAP", "0.15"))
+    overfit_max_drawdown_r: float = float(os.getenv("OVERFIT_MAX_DRAWDOWN_R", "10.0"))
+    overfit_max_loss_streak: int = int(os.getenv("OVERFIT_MAX_LOSS_STREAK", "7"))
     spread_bps: float = float(os.getenv("SPREAD_BPS", "1.5"))
     slippage_bps: float = float(os.getenv("SLIPPAGE_BPS", "0.5"))
     backtest_stop_atr: float = float(os.getenv("BACKTEST_STOP_ATR", "1.20"))
@@ -78,6 +86,22 @@ class Settings:
             raise ValueError("DISCOVERIES_PER_CYCLE cannot be negative")
         if self.discovery_library_size < 100:
             raise ValueError("DISCOVERY_LIBRARY_SIZE must be at least 100")
+        if not 0.0 <= self.overfit_min_adjusted_score <= 1.0:
+            raise ValueError("OVERFIT_MIN_ADJUSTED_SCORE must be between 0 and 1")
+        if self.overfit_min_profit_factor < 1.0:
+            raise ValueError("OVERFIT_MIN_PROFIT_FACTOR must be at least 1.0")
+        if self.overfit_min_avg_r < 0:
+            raise ValueError("OVERFIT_MIN_AVG_R cannot be negative")
+        if self.overfit_min_trades < 20:
+            raise ValueError("OVERFIT_MIN_TRADES must be at least 20")
+        if not 0.0 <= self.overfit_max_walk_forward_std <= 1.0:
+            raise ValueError("OVERFIT_MAX_WF_STD must be between 0 and 1")
+        if not 0.0 <= self.overfit_max_train_valid_gap <= 1.0:
+            raise ValueError("OVERFIT_MAX_TRAIN_VALID_GAP must be between 0 and 1")
+        if self.overfit_max_drawdown_r <= 0:
+            raise ValueError("OVERFIT_MAX_DRAWDOWN_R must be positive")
+        if self.overfit_max_loss_streak < 1:
+            raise ValueError("OVERFIT_MAX_LOSS_STREAK must be at least 1")
         if self.spread_bps < 0 or self.slippage_bps < 0:
             raise ValueError("SPREAD_BPS and SLIPPAGE_BPS cannot be negative")
         if self.backtest_stop_atr <= 0:
