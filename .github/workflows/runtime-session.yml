@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   runtime:
@@ -34,6 +35,22 @@ jobs:
               handle.write(f"enabled={'true' if enabled else 'false'}\n")
           print(f"Requested runtime state: {'ON' if enabled else 'OFF'}")
           PY
+
+      - name: Cancel stale runtime sessions
+        if: steps.control.outputs.enabled == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          current="${GITHUB_RUN_ID}"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs?status=in_progress&per_page=100" \
+            --jq '.workflow_runs[] | select(.path==".github/workflows/runtime-session.yml") | .id' \
+            | while read -r run_id; do
+                if [ -n "$run_id" ] && [ "$run_id" != "$current" ]; then
+                  echo "Cancelling stale runtime run $run_id"
+                  gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/cancel" || true
+                fi
+              done
 
       - name: Install dependencies
         if: steps.control.outputs.enabled == 'true'
