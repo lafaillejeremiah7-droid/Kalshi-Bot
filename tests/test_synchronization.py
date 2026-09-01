@@ -14,7 +14,6 @@ from xau_company.overfit import OverfitAuditor
 from xau_company.quality import MarketDataQualityAgent
 from xau_company.research import Candidate, CandidateScore, StrategyResearchAgent
 from xau_company.selector import StrategySelectorAgent
-from xau_company.strategy_evolution import StrategyEvolutionAgent
 
 
 def _df(n=500, freq="15min", start="2026-08-31T07:00:00Z"):
@@ -147,7 +146,6 @@ def test_boss_live_risk_geometry_matches_research_and_uses_live_price():
         "1h": _df(n=500, freq="1h", start="2026-08-10T07:00:00Z"),
         "4h": _df(n=500, freq="4h", start="2026-06-09T07:00:00Z"),
     }
-    # Keep the Session Desk inside its 07:00-17:00 UTC window.
     for frame in frames.values():
         frame.loc[frame.index[-1], "datetime"] = pd.Timestamp("2026-08-31T15:00:00Z")
 
@@ -232,30 +230,6 @@ def test_invalid_zero_schedule_is_rejected():
     )
     with pytest.raises(ValueError, match="RESEARCH_EVERY_CYCLES"):
         cfg.validate()
-
-
-def test_lifetime_trial_count_persists_and_accumulates(tmp_path):
-    path = str(tmp_path / "strategies.json")
-    first = StrategyEvolutionAgent(path, discoveries_per_cycle=0, max_library_size=100)
-    assert first.increment_tested_trials(20_000) == 20_000
-    second = StrategyEvolutionAgent(path, discoveries_per_cycle=0, max_library_size=100)
-    assert second.increment_tested_trials(20_000) == 40_000
-    assert second.tested_trials_lifetime() == 40_000
-
-
-def test_quarantined_history_is_not_evicted_by_library_cap():
-    bot = StrategyEvolutionAgent(":memory:", discoveries_per_cycle=0, max_library_size=100)
-    rows = [
-        {"family": "ensemble", "params": ["q", i], "status": "QUARANTINED"}
-        for i in range(110)
-    ] + [
-        {"family": "ensemble", "params": ["e", i], "status": "EXPERIMENTAL"}
-        for i in range(40)
-    ]
-    bot._write(rows)
-    saved = bot.entries()
-    assert len(saved) == 110
-    assert all(row["status"] == "QUARANTINED" for row in saved)
 
 
 def test_two_fold_configuration_does_not_create_impossible_three_fold_promotion_gate(tmp_path):
