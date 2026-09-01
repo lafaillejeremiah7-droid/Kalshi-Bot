@@ -23,7 +23,6 @@ def _signal() -> TradeSignal:
 
 def test_live_mode_requires_telegram_credentials():
     cfg = Settings(
-        twelve_data_api_key="test",
         paper_mode=False,
         telegram_bot_token="",
         telegram_chat_id="",
@@ -34,7 +33,6 @@ def test_live_mode_requires_telegram_credentials():
 
 def test_consensus_cannot_exceed_directional_specialist_count():
     cfg = Settings(
-        twelve_data_api_key="test",
         min_consensus=7,
     )
     with pytest.raises(ValueError, match="MIN_CONSENSUS"):

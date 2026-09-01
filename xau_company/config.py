@@ -18,9 +18,6 @@ def _bool(name: str, default: bool) -> bool:
 
 @dataclass(frozen=True)
 class Settings:
-    # Deprecated compatibility field. Live market data now comes from the
-    # keyless Dukascopy public datafeed; this value is not required or used.
-    twelve_data_api_key: str = os.getenv("TWELVE_DATA_API_KEY", "")
     telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
     telegram_chat_id: str = os.getenv("TELEGRAM_CHAT_ID", "")
     symbol: str = os.getenv("SYMBOL", "XAU/USD")

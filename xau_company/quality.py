@@ -112,7 +112,7 @@ class MarketDataQualityAgent:
         else:
             now_ts = now_ts.tz_convert("UTC")
 
-        # Twelve Data timestamps identify the candle start. Never let a still-forming
+        # Provider timestamps identify the candle start. Never let a still-forming
         # candle influence research, regime classification, votes or the final signal.
         complete_mask = work["datetime"] + delta <= now_ts
         work = work.loc[complete_mask].reset_index(drop=True)

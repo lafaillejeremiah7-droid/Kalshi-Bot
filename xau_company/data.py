@@ -47,9 +47,6 @@ class DukascopyClient:
     Completed daily minute files provide history. Recent hourly tick files are
     converted into completed one-minute OHLC bars so the company does not depend
     on Dukascopy publishing the current day's minute-candle file intraday.
-
-    ``api_key`` remains an accepted constructor argument only for backwards
-    compatibility with older ``TwelveDataClient`` call sites. It is ignored.
     """
 
     BASE_URLS = (
@@ -66,7 +63,6 @@ class DukascopyClient:
 
     def __init__(
         self,
-        api_key: str = "",
         timeout: int = 20,
         retries: int = 3,
         max_workers: int = 2,
@@ -75,7 +71,6 @@ class DukascopyClient:
         recent_tick_hours: int = 8,
         session: Any | None = None,
     ) -> None:
-        del api_key
         self.timeout = max(1, int(timeout))
         self.retries = max(1, int(retries))
         self.max_workers = max(1, min(4, int(max_workers)))
@@ -470,8 +465,3 @@ class DukascopyClient:
             if not data.empty:
                 frames[interval] = data
         return frames
-
-
-# Backwards-compatible import name used by main.py and older tests. This is now
-# the keyless Dukascopy implementation; no Twelve Data request is made.
-TwelveDataClient = DukascopyClient

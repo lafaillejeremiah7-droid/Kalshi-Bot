@@ -228,7 +228,6 @@ def test_partial_emission_candle_is_marked_ambiguous_not_win_or_loss(tmp_path):
 
 def test_invalid_zero_schedule_is_rejected():
     cfg = Settings(
-        twelve_data_api_key="test",
         research_every_cycles=0,
     )
     with pytest.raises(ValueError, match="RESEARCH_EVERY_CYCLES"):

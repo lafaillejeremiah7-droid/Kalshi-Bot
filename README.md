@@ -28,7 +28,7 @@ All strategy, regime and specialist logic works from completed candles only. Req
 
 A company setup is identified by **symbol + completed research-candle timestamp**. Only one authorization may be emitted for that research candle even if, during later polling, the preferred strategy, direction, quote, stop or target changes. `MAX_SIGNAL_DELAY_MINUTES` prevents sending a setup too long after its research candle closed.
 
-The final Entry comes from Twelve Data's current-price endpoint rather than simply reusing the last candle close. The framework still labels the signal as research-only because a reference price is not a guaranteed executable broker fill.
+The final Entry comes from Dukascopy's most recent valid tick data rather than simply reusing the last candle close. The framework still labels the signal as research-only because a reference price is not a guaranteed executable broker fill.
 
 Cached DXY/yield frames are revalidated on every decision cycle. The API call may be rate-limited to every five cycles, but stale cached macro data is discarded instead of continuing to influence a decision.
 
@@ -206,7 +206,7 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Fill in `TWELVE_DATA_API_KEY`, `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`. Keep `PAPER_MODE=true` until enough forward evidence exists.
+Fill in `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`. Dukascopy market data is keyless. Keep `PAPER_MODE=true` until enough forward evidence exists.
 
 Run the company:
 

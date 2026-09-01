@@ -8,7 +8,7 @@ import pandas as pd
 
 from xau_company.adaptive_research import AdaptiveStrategyResearchAgent
 from xau_company.config import Settings
-from xau_company.data import TwelveDataClient
+from xau_company.data import DukascopyClient
 from xau_company.frequency import TradeFrequencyGuard
 from xau_company.orchestrator import BossAgent
 from xau_company.outcomes import OutcomeCalibrationAgent
@@ -39,7 +39,7 @@ def _frame_timestamp(frame: pd.DataFrame | None):
 def run() -> None:
     cfg = Settings()
     cfg.validate()
-    market = TwelveDataClient(cfg.twelve_data_api_key)
+    market = DukascopyClient()
     quality = MarketDataQualityAgent(
         max_stale_multiplier=cfg.max_stale_multiplier,
         timezone_name="America/Chicago",

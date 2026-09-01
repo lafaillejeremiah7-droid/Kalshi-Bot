@@ -55,7 +55,6 @@ class _DukascopyEmpty(_DukascopyOK):
 
 
 def test_dukascopy_preflight_accepts_live_data_without_api_key(monkeypatch):
-    monkeypatch.delenv("TWELVE_DATA_API_KEY", raising=False)
     monkeypatch.setattr(preflight, "DukascopyClient", _DukascopyOK)
     price, stamp = preflight.check_dukascopy()
     assert price == 2500.25

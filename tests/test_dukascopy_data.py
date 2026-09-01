@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta, timezone
 import pandas as pd
 
 from xau_company.config import Settings
-from xau_company.data import DukascopyClient, TwelveDataClient
+from xau_company.data import DukascopyClient
 
 
 def _candle_payload(records: list[tuple[int, int, int, int, int, float]]) -> bytes:
@@ -20,12 +20,8 @@ def _tick_payload(records: list[tuple[int, int, int, float, float]]) -> bytes:
     return lzma.compress(raw)
 
 
-def test_twelve_data_name_is_backward_compatible_alias() -> None:
-    assert TwelveDataClient is DukascopyClient
-
-
-def test_settings_no_longer_require_twelve_data_key() -> None:
-    Settings(twelve_data_api_key="", paper_mode=True).validate()
+def test_settings_validate_without_market_data_credentials() -> None:
+    Settings(paper_mode=True).validate()
 
 
 def test_dukascopy_url_uses_zero_based_month() -> None:
