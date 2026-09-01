@@ -5,6 +5,8 @@ from typing import Any
 
 import requests
 
+from xau_company.data import DukascopyClient
+
 
 def _required(name: str) -> str:
     value = os.getenv(name, "").strip()
@@ -13,22 +15,17 @@ def _required(name: str) -> str:
     return value
 
 
-def check_twelve_data(session: Any = requests) -> float:
-    api_key = _required("TWELVE_DATA_API_KEY")
+def check_dukascopy() -> tuple[float, str]:
     symbol = os.getenv("SYMBOL", "XAU/USD")
-    response = session.get(
-        "https://api.twelvedata.com/price",
-        params={"symbol": symbol, "apikey": api_key},
-        timeout=20,
-    )
-    response.raise_for_status()
-    payload = response.json()
-    if "price" not in payload:
-        raise RuntimeError(f"Twelve Data price check failed: {payload.get('message', 'missing price')}")
-    price = float(payload["price"])
+    client = DukascopyClient(timeout=20, retries=2, max_workers=4)
+    candles = client.candles(symbol, "1min", 10)
+    if candles.empty:
+        raise RuntimeError("Dukascopy returned no XAU/USD minute candles")
+    price = client.price(symbol)
     if price <= 0:
-        raise RuntimeError("Twelve Data returned a non-positive price")
-    return price
+        raise RuntimeError("Dukascopy returned a non-positive XAU/USD price")
+    stamp = str(candles["datetime"].iloc[-1])
+    return price, stamp
 
 
 def check_telegram(session: Any = requests) -> None:
@@ -50,8 +47,11 @@ def check_telegram(session: Any = requests) -> None:
 
 
 def run() -> int:
-    price = check_twelve_data()
-    print(f"Twelve Data preflight: OK ({os.getenv('SYMBOL', 'XAU/USD')} price={price:.2f})")
+    price, stamp = check_dukascopy()
+    print(
+        f"Dukascopy preflight: OK ({os.getenv('SYMBOL', 'XAU/USD')} "
+        f"price={price:.2f}, latest_1m={stamp})"
+    )
     check_telegram()
     print("Telegram preflight: OK (bot token and chat reachable; no message sent)")
     return 0

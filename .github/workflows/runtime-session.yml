@@ -48,10 +48,9 @@ jobs:
           restore-keys: |
             xau-runtime-state-
 
-      - name: Verify live data and Telegram
+      - name: Verify Dukascopy live data and Telegram
         if: steps.control.outputs.enabled == 'true'
         env:
-          TWELVE_DATA_API_KEY: ${{ secrets.TWELVE_DATA_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           SYMBOL: XAU/USD
@@ -60,7 +59,6 @@ jobs:
       - name: Run company until OFF
         if: steps.control.outputs.enabled == 'true'
         env:
-          TWELVE_DATA_API_KEY: ${{ secrets.TWELVE_DATA_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           PAPER_MODE: "false"

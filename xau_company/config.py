@@ -18,6 +18,8 @@ def _bool(name: str, default: bool) -> bool:
 
 @dataclass(frozen=True)
 class Settings:
+    # Deprecated compatibility field. Live market data now comes from the
+    # keyless Dukascopy public datafeed; this value is not required or used.
     twelve_data_api_key: str = os.getenv("TWELVE_DATA_API_KEY", "")
     telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
     telegram_chat_id: str = os.getenv("TELEGRAM_CHAT_ID", "")
@@ -76,8 +78,6 @@ class Settings:
 
     def validate(self) -> None:
         allowed = {"1min", "5min", "15min", "30min", "45min", "1h", "2h", "4h", "8h", "1day"}
-        if not self.twelve_data_api_key:
-            raise RuntimeError("TWELVE_DATA_API_KEY is required")
         if not self.paper_mode and (not self.telegram_bot_token or not self.telegram_chat_id):
             raise RuntimeError("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are required when PAPER_MODE=false")
         if not 0.5 <= self.min_confidence <= 0.99:
