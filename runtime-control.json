@@ -1,5 +1,5 @@
 {
   "enabled": true,
-  "generation": 4,
-  "reason": "Relaunch after dashboard DNS readiness fix"
+  "generation": 5,
+  "reason": "Launch with hardened preflight and hosted dashboard"
 }
