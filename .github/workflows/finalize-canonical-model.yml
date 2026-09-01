@@ -71,7 +71,6 @@ jobs:
               return text
           patch('xau_company/orchestrator.py', orchestrator)
 
-          # Mechanical canonical-field rename in tests where Candidate objects are inspected.
           for p in Path('tests').glob('test_*.py'):
               text = p.read_text(encoding='utf-8')
               text = text.replace('.candidate.family', '.candidate.strategy_id')
@@ -104,6 +103,8 @@ jobs:
             exit 1
           fi
       - name: Test canonical model
+        env:
+          PYTHONPATH: ${{ github.workspace }}
         run: |
           pip install -r requirements.txt
           python -m compileall -q xau_company
