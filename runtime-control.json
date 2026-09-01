@@ -1,5 +1,5 @@
 {
   "enabled": true,
-  "generation": 5,
-  "reason": "Launch with hardened preflight and hosted dashboard"
+  "generation": 6,
+  "reason": "Dashboard-first runtime with fail-safe market-data degradation"
 }
