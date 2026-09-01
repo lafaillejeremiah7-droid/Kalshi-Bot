@@ -11,6 +11,8 @@ from typing import Any, Protocol
 
 import websockets
 
+from kalshi_research.domain.events import Source, SpotTickEvent
+
 
 COINBASE_WS_URL = "wss://advanced-trade-ws.coinbase.com"
 KRAKEN_WS_URL = "wss://ws.kraken.com/v2"
@@ -85,7 +87,13 @@ def _decode(raw: str | bytes | dict[str, Any]) -> dict[str, Any]:
     return value
 
 
-def _decimal(value: Any, field: str, *, positive: bool = False, nonnegative: bool = False) -> Decimal:
+def _decimal(
+    value: Any,
+    field: str,
+    *,
+    positive: bool = False,
+    nonnegative: bool = False,
+) -> Decimal:
     if isinstance(value, bool):
         raise ExternalFeedError(f"{field} must be numeric")
     try:
@@ -134,6 +142,30 @@ def _quote(
         last=last_d,
         source_sequence=source_sequence,
         checksum=checksum,
+    )
+
+
+def quote_to_spot_event(quote: ExternalQuote) -> SpotTickEvent:
+    try:
+        source = Source(quote.venue)
+    except ValueError as exc:
+        raise ExternalFeedError(f"unsupported research venue: {quote.venue!r}") from exc
+    if source not in {Source.COINBASE, Source.KRAKEN}:
+        raise ExternalFeedError(f"unsupported spot source: {source}")
+    canonical_symbol = quote.symbol.replace("/", "-")
+    return SpotTickEvent(
+        source=source,
+        event_ts_ns=quote.event_ts_ns,
+        recv_ts_ns=quote.recv_ts_ns,
+        venue=quote.venue,
+        symbol=canonical_symbol,
+        bid=quote.bid,
+        ask=quote.ask,
+        bid_size=quote.bid_size,
+        ask_size=quote.ask_size,
+        last=quote.last,
+        source_sequence=quote.source_sequence,
+        checksum=quote.checksum,
     )
 
 
@@ -241,10 +273,10 @@ def kraken_subscription_message() -> dict[str, Any]:
 class KrakenBook:
     """Stateful Kraken Spot WebSocket v2 BTC/USD level-2 book.
 
-    Kraken includes a CRC32 checksum for the top ten levels. The checksum is
-    retained on emitted quotes for audit/replay, but this class intentionally
-    does not claim verification until the exchange-specific canonical string
-    algorithm is implemented and independently tested.
+    Each frame is validated against temporary book copies and committed only if
+    the resulting top of book is valid. Kraken's CRC32 checksum is retained for
+    audit/replay, but is not labeled verified until its exact exchange-specific
+    canonicalization algorithm is implemented and independently tested.
     """
 
     def __init__(self) -> None:
@@ -273,6 +305,9 @@ class KrakenBook:
             raise ExternalFeedError("Kraken book message must contain data")
 
         quotes: list[ExternalQuote] = []
+        next_bids = dict(self.bids)
+        next_asks = dict(self.asks)
+        next_ready = self.ready
         for book in data:
             if not isinstance(book, dict):
                 raise ExternalFeedError("Kraken book data entry must be an object")
@@ -282,23 +317,25 @@ class KrakenBook:
             if not isinstance(timestamp, str):
                 raise ExternalFeedError("Kraken book timestamp is missing")
             if message_type == "snapshot":
-                self.bids.clear()
-                self.asks.clear()
-                self._apply_levels(self.bids, book.get("bids", []), "bid")
-                self._apply_levels(self.asks, book.get("asks", []), "ask")
-                self.ready = True
+                next_bids = {}
+                next_asks = {}
+                self._apply_levels(next_bids, book.get("bids", []), "bid")
+                self._apply_levels(next_asks, book.get("asks", []), "ask")
+                next_ready = True
             else:
-                if not self.ready:
+                if not next_ready:
                     raise ExternalFeedError("Kraken book update received before snapshot")
-                self._apply_levels(self.bids, book.get("bids", []), "bid")
-                self._apply_levels(self.asks, book.get("asks", []), "ask")
+                self._apply_levels(next_bids, book.get("bids", []), "bid")
+                self._apply_levels(next_asks, book.get("asks", []), "ask")
 
-            if not self.bids or not self.asks:
+            if not next_bids or not next_asks:
                 raise ExternalFeedError("Kraken book has no two-sided top of book")
-            best_bid = max(self.bids)
-            best_ask = min(self.asks)
+            best_bid = max(next_bids)
+            best_ask = min(next_asks)
             checksum = book.get("checksum")
-            if isinstance(checksum, bool) or (checksum is not None and not isinstance(checksum, int)):
+            if isinstance(checksum, bool) or (
+                checksum is not None and not isinstance(checksum, int)
+            ):
                 raise ExternalFeedError("Kraken checksum must be an integer when present")
             quotes.append(
                 _quote(
@@ -308,11 +345,16 @@ class KrakenBook:
                     recv_ts_ns=recv_ts_ns,
                     bid=best_bid,
                     ask=best_ask,
-                    bid_size=self.bids[best_bid],
-                    ask_size=self.asks[best_ask],
+                    bid_size=next_bids[best_bid],
+                    ask_size=next_asks[best_ask],
                     checksum=checksum,
                 )
             )
+
+        if quotes:
+            self.bids = next_bids
+            self.asks = next_asks
+            self.ready = next_ready
         return tuple(quotes)
 
     @staticmethod
