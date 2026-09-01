@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+from .canonical_strategies import BY_ID
 from .models import AgentVote, Direction
 from .research import CandidateScore, StrategyResearchAgent
 
@@ -26,58 +27,63 @@ class StrategyPick:
 
     @property
     def label(self) -> str:
-        candidate = self.score.candidate
-        if candidate.family == "invented":
-            try:
-                family_id, variant_id, logic, feature_specs, gate_spec = candidate.params
-                features = "+".join(str(spec[0]).replace("_", " ") for spec in feature_specs)
-                gate = str(gate_spec[0]).replace("_", " ")
-                return f"Invention {family_id} v{variant_id}: {features} | {gate} | {logic}"
-            except (TypeError, ValueError, IndexError):
-                return "Invented strategy"
-        if candidate.family == "ensemble":
-            try:
-                family_a, params_a, family_b, params_b, mode = candidate.params
-                def parent_label(family, params):
-                    if family == "invented" and params:
-                        return f"{params[0]}v{params[1]}"
-                    return str(family)
-                return f"Ensemble {parent_label(family_a, params_a)} + {parent_label(family_b, params_b)} | {mode}"
-            except (TypeError, ValueError, IndexError):
-                return "Ensemble strategy"
-        params = ", ".join(str(x) for x in candidate.params)
-        return f"{candidate.family}({params})"
+        strategy = BY_ID.get(self.score.candidate.family)
+        return strategy.name if strategy is not None else self.score.candidate.family
 
 
 class StrategySelectorAgent:
-    """Choose the researched strategy most compatible with the market right now."""
+    """Choose the surviving canonical strategy most compatible with the current market."""
 
     name = "Strategy Selection Desk"
 
     REGIME_FIT = {
         "trend_up": {
-            "trend": 1.00, "triple_trend": 1.00, "rsi_trend": 0.96, "pullback": 0.94,
-            "momentum": 0.93, "breakout": 0.86, "bollinger_breakout": 0.83,
-            "volatility_breakout": 0.78, "mean_reversion": 0.43, "bollinger_reversion": 0.40,
-            "range_fade": 0.35,
+            "trend": 1.00,
+            "momentum": 0.94,
+            "breakout": 0.90,
+            "smc": 0.82,
+            "price_action": 0.80,
+            "geometry": 0.72,
+            "volume": 0.78,
+            "quant": 0.78,
+            "macro": 0.72,
+            "mean_reversion": 0.42,
         },
         "trend_down": {
-            "trend": 1.00, "triple_trend": 1.00, "rsi_trend": 0.96, "pullback": 0.94,
-            "momentum": 0.93, "breakout": 0.86, "bollinger_breakout": 0.83,
-            "volatility_breakout": 0.78, "mean_reversion": 0.43, "bollinger_reversion": 0.40,
-            "range_fade": 0.35,
+            "trend": 1.00,
+            "momentum": 0.94,
+            "breakout": 0.90,
+            "smc": 0.82,
+            "price_action": 0.80,
+            "geometry": 0.72,
+            "volume": 0.78,
+            "quant": 0.78,
+            "macro": 0.72,
+            "mean_reversion": 0.42,
         },
         "range": {
-            "mean_reversion": 1.00, "bollinger_reversion": 0.98, "range_fade": 0.96,
-            "pullback": 0.58, "trend": 0.50, "triple_trend": 0.48, "rsi_trend": 0.50,
-            "momentum": 0.50, "breakout": 0.45, "bollinger_breakout": 0.43,
-            "volatility_breakout": 0.42,
+            "mean_reversion": 1.00,
+            "price_action": 0.88,
+            "smc": 0.80,
+            "geometry": 0.82,
+            "volume": 0.83,
+            "quant": 0.77,
+            "trend": 0.48,
+            "momentum": 0.50,
+            "breakout": 0.44,
+            "macro": 0.55,
         },
         "volatile": {
-            "volatility_breakout": 1.00, "breakout": 0.94, "bollinger_breakout": 0.92,
-            "momentum": 0.84, "trend": 0.70, "triple_trend": 0.72, "rsi_trend": 0.66,
-            "pullback": 0.60, "mean_reversion": 0.35, "bollinger_reversion": 0.34,
-            "range_fade": 0.30,
+            "breakout": 1.00,
+            "momentum": 0.88,
+            "smc": 0.84,
+            "price_action": 0.78,
+            "trend": 0.76,
+            "volume": 0.82,
+            "quant": 0.80,
+            "macro": 0.76,
+            "geometry": 0.68,
+            "mean_reversion": 0.38,
         },
     }
 
@@ -89,7 +95,9 @@ class StrategySelectorAgent:
         self.min_agreement = max(1, int(min_agreement))
 
     def _family_regime_fit(self, family: str, regime: str) -> float:
-        return self.REGIME_FIT.get(regime, {}).get(family, 0.55)
+        strategy = BY_ID.get(family)
+        category = strategy.category if strategy is not None else family
+        return self.REGIME_FIT.get(regime, {}).get(category, 0.55)
 
     def _historical_regime_fit(self, result: CandidateScore, regime: str) -> tuple[float, int]:
         raw = result.regime_scores.get(regime, 0.50)
@@ -103,7 +111,6 @@ class StrategySelectorAgent:
         return regime_total if regime_total > 0 else max(0, int(result.trades))
 
     def _directional_analyst_votes(self, votes: list[AgentVote]) -> list[AgentVote]:
-        """Return specialist directional votes without double-counting context."""
         filtered: list[AgentVote] = []
         for vote in votes:
             if vote.metadata.get("timeframe") in self.TF_WEIGHTS:

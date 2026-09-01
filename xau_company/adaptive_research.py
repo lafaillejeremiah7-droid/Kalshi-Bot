@@ -3,16 +3,16 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from .canonical_strategies import BY_ID
 from .overfit import OverfitAuditor
 from .research import CandidateScore, StrategyResearchAgent
 
 
 class AdaptiveStrategyResearchAgent(StrategyResearchAgent):
-    """Audited research lab for the fixed strategy library.
+    """Audited research lab for the survivor-only canonical strategy library.
 
-    Strategy Evolution and Strategy Invention have been removed from the company.
-    Legacy constructor arguments and telemetry are accepted only as inert
-    compatibility shims so older launch/backtest code cannot re-enable them.
+    Strategy Evolution and Strategy Invention remain permanently removed.
+    Legacy constructor arguments are accepted only as inert compatibility shims.
     """
 
     _REMOVED_DYNAMIC_ARGS = {
@@ -43,7 +43,6 @@ class AdaptiveStrategyResearchAgent(StrategyResearchAgent):
         for key in self._REMOVED_DYNAMIC_ARGS:
             kwargs.pop(key, None)
         super().__init__(*args, **kwargs)
-
         self.overfit_auditor = OverfitAuditor(
             min_adjusted_score=overfit_min_adjusted_score,
             min_profit_factor=overfit_min_profit_factor,
@@ -55,15 +54,12 @@ class AdaptiveStrategyResearchAgent(StrategyResearchAgent):
             max_loss_streak=overfit_max_loss_streak,
             min_folds=self.min_walk_forward_folds,
         )
-
         self.last_seed_audited = 0
         self.last_seed_overfit_rejected = 0
         self.last_seed_live_eligible = 0
         self.last_lifetime_trials = 0
 
-        # Compatibility telemetry for callers written before the two employees
-        # were removed. These values are permanently zero and have no engine
-        # behind them.
+        # Removed-employee compatibility telemetry is permanently zero.
         self.dynamic_library_size = 0
         self.invention_library_size = 0
         self.invention_family_count = 0
@@ -83,7 +79,6 @@ class AdaptiveStrategyResearchAgent(StrategyResearchAgent):
         research_catalog: list[CandidateScore],
         seed_tested_trials: int | None = None,
     ) -> None:
-        """Build the live catalog only from fixed-library strategies that pass audit."""
         eligible: list[CandidateScore] = []
         seed_audited = 0
         seed_rejected = 0
@@ -112,24 +107,32 @@ class AdaptiveStrategyResearchAgent(StrategyResearchAgent):
         self.catalog = self._build_catalog(eligible)
         self.top = self.catalog[:25]
 
-        buckets: dict[str, list[float]] = {}
+        strategy_buckets: dict[str, list[float]] = {}
+        category_buckets: dict[str, list[float]] = {}
         for result in self.catalog:
-            buckets.setdefault(result.candidate.family, []).append(result.score)
+            sid = result.candidate.family
+            strategy_buckets.setdefault(sid, []).append(result.score)
+            definition = BY_ID.get(sid)
+            if definition is not None:
+                category_buckets.setdefault(definition.category, []).append(result.score)
         self.family_quality = {
-            family: float(np.clip(np.mean(vals[:20]), 0.35, 0.90))
-            for family, vals in buckets.items()
+            sid: float(np.clip(np.mean(vals), 0.35, 0.90))
+            for sid, vals in strategy_buckets.items()
+        }
+        self.category_quality = {
+            category: float(np.clip(np.mean(vals), 0.35, 0.90))
+            for category, vals in category_buckets.items()
         }
 
     def run(self, df: pd.DataFrame) -> list[CandidateScore]:
         selected = self._balanced_candidates()
         self.last_evaluated = len(selected)
         self.last_lifetime_trials += self.last_evaluated
-        cache: dict[tuple, pd.Series | tuple[pd.Series, pd.Series]] = {}
-        regimes = self._historical_regimes(df, cache)
+        regimes = self._historical_regimes(df)
 
         research_catalog: list[CandidateScore] = []
         for candidate in selected:
-            result = self._evaluate(df, candidate, cache, regimes)
+            result = self._evaluate(df, candidate, None, regimes)
             if result is not None:
                 research_catalog.append(result)
         research_catalog.sort(key=lambda x: x.score, reverse=True)

@@ -54,7 +54,7 @@ def _score(candidate: Candidate, **overrides) -> CandidateScore:
     return CandidateScore(**values)
 
 
-def _signal(entry=2500.0, strategy="trend(5, 30, 0.0)"):
+def _signal(entry=2500.0, strategy="Fair Value Gap (FVG) retracement continuation"):
     return TradeSignal(
         "XAU/USD",
         Direction.BUY,
@@ -106,7 +106,7 @@ def test_selector_does_not_double_count_timeframe_or_macro_votes_as_analysts():
 
 
 def test_overfit_minimum_trade_gate_uses_oos_sample_not_total_backtest_trades():
-    candidate = Candidate("ensemble", ("trend", (), "momentum", (), "confirm"))
+    candidate = Candidate("S001")
     score = _score(candidate, trades=500, regime_trades={"trend_up": 12, "range": 8})
     result = OverfitAuditor(min_trades=40).audit(score, tested_trials=20_000)
     assert result.passed is False
@@ -133,10 +133,12 @@ def test_boss_live_risk_geometry_matches_research_and_uses_live_price():
         backtest_stop_atr=1.2,
         backtest_reward_risk=1.7,
     )
-    candidate = Candidate("trend", (5, 30, 0.0))
+    candidate = Candidate("S001")
     lab.catalog = [_score(candidate)]
     lab.top = list(lab.catalog)
-    lab.family_quality = {"trend": 0.80, "momentum": 0.80, "breakout": 0.80}
+    lab.family_quality = {"S001": 0.80}
+    lab.category_quality = {"trend": 0.80, "momentum": 0.80, "breakout": 0.80, "smc": 0.80}
+    lab.current_direction = lambda *_: Direction.BUY
 
     core = _df(n=500, freq="15min", start="2026-08-26T07:00:00Z")
     frames = {
@@ -176,7 +178,7 @@ def test_daily_slot_reservation_is_atomic_and_counts_reserved_signal(tmp_path):
     end = pd.Timestamp("2026-09-01T05:00:00Z")
     first = tracker.reserve_if_under_cap(_signal(), now, 0.8, now, start, end, 1)
     second = tracker.reserve_if_under_cap(
-        _signal(strategy="breakout(20, 0.0, 5)"),
+        _signal(strategy="Opening Range Breakout (ORB)"),
         now + pd.Timedelta(minutes=5),
         0.8,
         now + pd.Timedelta(minutes=5),

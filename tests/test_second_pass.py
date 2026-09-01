@@ -41,8 +41,8 @@ def _frame(interval: str, now: pd.Timestamp, rows: int = 250) -> pd.DataFrame:
 def test_one_research_candle_cannot_emit_two_different_strategy_decisions(tmp_path):
     tracker = OutcomeCalibrationAgent(str(tmp_path / "one-setup.sqlite3"))
     setup = pd.Timestamp("2026-08-31T15:00:00Z")
-    first = _signal("trend(5, 30, 0.0)", Direction.BUY)
-    changed = _signal("breakout(20, 0.0, 5)", Direction.SELL)
+    first = _signal("Fair Value Gap (FVG) retracement continuation", Direction.BUY)
+    changed = _signal("Opening Range Breakout (ORB)", Direction.SELL)
 
     assert tracker.record(first, setup + pd.Timedelta(seconds=10), setup_at=setup) is True
     assert tracker.exists(changed, setup) is True
@@ -52,7 +52,7 @@ def test_one_research_candle_cannot_emit_two_different_strategy_decisions(tmp_pa
 def test_candle_starting_at_holding_expiry_cannot_resolve_trade(tmp_path):
     tracker = OutcomeCalibrationAgent(str(tmp_path / "expiry.sqlite3"), max_age_hours=1)
     observed = pd.Timestamp("2026-08-31T15:00:00Z")
-    signal = _signal("trend(5, 30, 0.0)")
+    signal = _signal("Fair Value Gap (FVG) retracement continuation")
     signal.strategy_stats["max_holding_minutes"] = 1
     assert tracker.record(signal, observed, setup_at=observed)
 

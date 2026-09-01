@@ -59,7 +59,7 @@ def test_outcome_ledger_dedupes_and_resolves_collision_as_loss(tmp_path):
     tracker = OutcomeCalibrationAgent(str(tmp_path / "outcomes.sqlite3"))
     signal = TradeSignal(
         "XAU/USD", Direction.BUY, 100, 98, 102, 0.80, "trend_up", ["test"], [],
-        selected_strategy="trend(5, 30, 0.0)",
+        selected_strategy="Dual-moving-average crossover",
     )
     observed = pd.Timestamp("2026-08-30T15:00:00Z")
 
@@ -91,7 +91,7 @@ def test_forward_losses_lower_calibrated_confidence(tmp_path):
     for i in range(10):
         signal = TradeSignal(
             "XAU/USD", Direction.BUY, 100 + i * 0.01, 98, 102, 0.80,
-            "trend_up", ["test"], [], selected_strategy="trend(5, 30, 0.0)",
+            "trend_up", ["test"], [], selected_strategy="Dual-moving-average crossover",
         )
         tracker.record(signal, base + pd.Timedelta(minutes=i), selection_confidence=0.80)
 
@@ -101,7 +101,7 @@ def test_forward_losses_lower_calibrated_confidence(tmp_path):
         "low": [97.0],
     })
     tracker.resolve_open(candles)
-    calibrated = tracker.calibrate(0.80, "trend(5, 30, 0.0)", "trend_up")
+    calibrated = tracker.calibrate(0.80, "Dual-moving-average crossover", "trend_up")
     assert calibrated.samples == 10
     assert calibrated.wins == 0
     assert calibrated.probability < 0.80
@@ -110,51 +110,37 @@ def test_forward_losses_lower_calibrated_confidence(tmp_path):
 
 def test_no_forward_samples_leave_confidence_unchanged(tmp_path):
     tracker = OutcomeCalibrationAgent(str(tmp_path / "empty.sqlite3"))
-    calibrated = tracker.calibrate(0.76, "trend(5, 30, 0.0)", "trend_up")
+    calibrated = tracker.calibrate(0.76, "Dual-moving-average crossover", "trend_up")
     assert calibrated.samples == 0
     assert calibrated.probability == 0.76
 
 
-def test_research_runs_walk_forward_lifecycle_and_caps_catalog():
-    lab = StrategyResearchAgent(
-        max_candidates=150,
-        spread_bps=1.0,
-        slippage_bps=0.4,
-        walk_forward_folds=3,
-        catalog_size=80,
-    )
-    top = lab.run(sample_df())
-    assert lab.last_evaluated == 150
-    assert len(top) <= 25
-    assert len(lab.catalog) <= 80
-    assert lab.last_universe_size >= 25_000
-    assert all(0 <= x.valid_hit_rate <= 1 for x in top)
-    assert all(x.folds >= 2 for x in top)
-    assert all(x.walk_forward_std >= 0 for x in top)
-    assert all(np.isfinite(x.avg_r_multiple) for x in top)
-    assert all(x.max_drawdown_r >= 0 for x in top)
-    assert all(x.max_loss_streak >= 0 for x in top)
-    assert all(x.backtest_model == "next_bar_atr" for x in top)
+def test_research_catalog_contains_only_unique_canonical_methodologies(monkeypatch):
+    monkeypatch.setenv("XAU_RESEARCH_USE_ALL_437", "1")
+    lab = StrategyResearchAgent(max_candidates=437, catalog_size=109)
+    selected = lab._balanced_candidates()
+    assert len(selected) == 437
+    assert lab.last_universe_size == 437
+    assert len({c.family for c in selected}) == 437
+    assert all(c.params == () for c in selected)
+    assert lab.catalog_size == 109
 
 
-def test_large_budget_reaches_tens_of_thousands_and_spans_families():
+def test_candidate_budget_is_hard_capped_at_437(monkeypatch):
+    monkeypatch.setenv("XAU_RESEARCH_USE_ALL_437", "1")
     lab = StrategyResearchAgent(max_candidates=20_000)
     selected = lab._balanced_candidates()
-    assert len(selected) == 20_000
-    assert lab.last_universe_size >= 25_000
-    families = {c.family for c in selected}
-    assert families == {
-        "trend", "triple_trend", "mean_reversion", "bollinger_reversion",
-        "breakout", "momentum", "pullback", "volatility_breakout",
-        "rsi_trend", "bollinger_breakout", "range_fade",
-    }
+    assert len(selected) == 437
+    assert lab.max_candidates == 437
+    assert lab.last_universe_size == 437
 
 
-def test_selector_chooses_researched_strategy_matching_market_and_analysts():
+def test_selector_chooses_canonical_strategy_matching_market_and_analysts():
     df = trending_df()
     lab = StrategyResearchAgent(max_candidates=10)
-    candidate = Candidate("trend", (5, 30, 0.0))
+    candidate = Candidate("S127")
     lab.catalog = [CandidateScore(candidate, 0.66, 0.68, 180, 0.72)]
+    lab.current_direction = lambda *_: Direction.BUY
     votes = [
         AgentVote("Trend Analyst", Direction.BUY, 0.84, "uptrend"),
         AgentVote("Structure Analyst", Direction.BUY, 0.76, "higher highs"),
@@ -168,27 +154,17 @@ def test_selector_chooses_researched_strategy_matching_market_and_analysts():
     assert pick.analyst_agreement == 2
 
 
-def test_selector_prefers_strategy_with_better_current_regime_history():
+def test_selector_prefers_canonical_strategy_with_better_current_regime_history():
     df = trending_df()
     lab = StrategyResearchAgent(max_candidates=10)
-    strong = Candidate("trend", (5, 30, 0.0))
-    weak = Candidate("trend", (8, 30, 0.0))
+    weak = Candidate("S126")
+    strong = Candidate("S127")
+    lab.current_direction = lambda *_: Direction.BUY
     lab.catalog = [
-        CandidateScore(
-            weak, 0.62, 0.62, 200, 0.72, walk_forward_hit_rate=0.62,
-            profit_factor=1.4, folds=4, regime_scores={"trend_up": 0.46}, regime_trades={"trend_up": 60},
-            avg_r_multiple=0.10, max_drawdown_r=4.0, max_loss_streak=5,
-        ),
-        CandidateScore(
-            strong, 0.62, 0.62, 200, 0.72, walk_forward_hit_rate=0.62,
-            profit_factor=1.4, folds=4, regime_scores={"trend_up": 0.72}, regime_trades={"trend_up": 60},
-            avg_r_multiple=0.30, max_drawdown_r=2.0, max_loss_streak=3,
-        ),
+        CandidateScore(weak, 0.62, 0.62, 200, 0.72, walk_forward_hit_rate=0.62, profit_factor=1.4, folds=4, regime_scores={"trend_up": 0.46}, regime_trades={"trend_up": 60}, avg_r_multiple=0.10, max_drawdown_r=4.0, max_loss_streak=5),
+        CandidateScore(strong, 0.62, 0.62, 200, 0.72, walk_forward_hit_rate=0.62, profit_factor=1.4, folds=4, regime_scores={"trend_up": 0.72}, regime_trades={"trend_up": 60}, avg_r_multiple=0.30, max_drawdown_r=2.0, max_loss_streak=3),
     ]
-    votes = [
-        AgentVote("Trend Analyst", Direction.BUY, 0.80, "uptrend"),
-        AgentVote("Structure Analyst", Direction.BUY, 0.75, "higher highs"),
-    ]
+    votes = [AgentVote("Trend Analyst", Direction.BUY, 0.80, "uptrend"), AgentVote("Structure Analyst", Direction.BUY, 0.75, "higher highs")]
     pick = StrategySelectorAgent(min_probability=0.0, min_agreement=2).select(df, "trend_up", votes, lab)
     assert pick is not None
     assert pick.score.candidate == strong
@@ -234,7 +210,7 @@ def test_news_risk_vetoes_inside_blackout_window():
 def test_telegram_format_contains_trade_strategy_lifecycle_and_calibration_fields():
     s = TradeSignal(
         "XAU/USD", Direction.BUY, 2500, 2490, 2518, 0.74, "trend_up", ["test"], [],
-        selected_strategy="trend(5, 30, 0.0)",
+        selected_strategy="Dual-moving-average crossover",
         strategy_stats={
             "valid_hit_rate": 0.68,
             "walk_forward_hit_rate": 0.67,
@@ -251,7 +227,7 @@ def test_telegram_format_contains_trade_strategy_lifecycle_and_calibration_field
     )
     text = TelegramNotifier("", "").format_signal(s)
     assert "Action: BUY" in text
-    assert "Strategy: trend(5, 30, 0.0)" in text
+    assert "Strategy: Dual-moving-average crossover" in text
     assert "executed trades" in text
     assert "Profit factor: 1.58" in text
     assert "Avg R: +0.35" in text

@@ -56,7 +56,7 @@ def _signal(direction: Direction, entry: float = 100.0) -> TradeSignal:
     target = 104.0 if direction == Direction.BUY else 96.0
     return TradeSignal(
         "XAU/USD", direction, entry, stop, target, 0.80, "trend_up", ["test"], [],
-        selected_strategy="trend(5, 30, 0.0)",
+        selected_strategy="Dual-moving-average crossover",
         strategy_stats={
             "research_interval": "15min",
             "max_holding_minutes": 30,
