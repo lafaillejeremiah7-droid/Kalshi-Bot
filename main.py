@@ -45,23 +45,12 @@ def run() -> None:
         timezone_name="America/Chicago",
     )
     lab = AdaptiveStrategyResearchAgent(
-        max_candidates=cfg.max_candidates,
         spread_bps=cfg.spread_bps,
         walk_forward_folds=cfg.walk_forward_folds,
-        catalog_size=cfg.research_catalog_size,
         min_walk_forward_folds=cfg.min_walk_forward_folds,
         slippage_bps=cfg.slippage_bps,
         backtest_stop_atr=cfg.backtest_stop_atr,
         backtest_reward_risk=cfg.backtest_reward_risk,
-        enable_evolution=cfg.enable_strategy_evolution,
-        strategy_library_path=cfg.strategy_library_path,
-        discoveries_per_cycle=cfg.discoveries_per_cycle,
-        discovery_library_size=cfg.discovery_library_size,
-        enable_invention=cfg.enable_strategy_invention,
-        invention_library_path=cfg.invention_library_path,
-        invented_families_per_cycle=cfg.invented_families_per_cycle,
-        invented_variants_per_family=cfg.invented_variants_per_family,
-        invention_library_size=cfg.invention_library_size,
         overfit_min_adjusted_score=cfg.overfit_min_adjusted_score,
         overfit_min_profit_factor=cfg.overfit_min_profit_factor,
         overfit_min_avg_r=cfg.overfit_min_avg_r,
@@ -128,8 +117,6 @@ def run() -> None:
             research_live_df = frames.get(cfg.research_interval)
             signal_setup_at = _frame_timestamp(research_live_df)
 
-            # Resolve forward outcomes from the finest healthy feed available.
-            # A 5m fallback prevents calibration from freezing when 1m is unavailable.
             resolution_df, resolution_minutes, resolution_interval = fetch_resolution_history(
                 market,
                 quality,
@@ -174,32 +161,19 @@ def run() -> None:
                 top = lab.run(research_df)
                 last_research_success = cycle
                 log.info(
-                    "Strategy lab universe=%s evaluated=%s lifetime_trials=%s live_catalog=%s experimental_catalog=%s invented_catalog=%s top=%s dynamic_library=%s invention_library=%s discovered=%s promoted=%s quarantined=%s invented_new_families=%s invented_new_variants=%s invention_promoted=%s invention_quarantined=%s invented_family_total=%s invented_family_promoted=%s walk_forward_folds=%s spread_bps=%.2f slippage_bps=%.2f",
+                    "Canonical strategy lab universe=%s evaluated=%s audited=%s rejected=%s eligible=%s live_catalog=%s top=%s walk_forward_folds=%s spread_bps=%.2f slippage_bps=%.2f",
                     lab.last_universe_size,
                     lab.last_evaluated,
-                    lab.last_lifetime_trials,
+                    lab.last_seed_audited,
+                    lab.last_seed_overfit_rejected,
+                    lab.last_seed_live_eligible,
                     len(lab.catalog),
-                    lab.last_experimental_catalog_size,
-                    lab.last_invented_catalog_size,
                     len(top),
-                    lab.dynamic_library_size,
-                    lab.invention_library_size,
-                    lab.last_discovered,
-                    lab.last_promoted,
-                    lab.last_quarantined,
-                    lab.last_invented_families,
-                    lab.last_invented_variants,
-                    lab.last_invention_promoted,
-                    lab.last_invention_quarantined,
-                    lab.invention_family_count,
-                    lab.invention_promoted_family_count,
                     lab.walk_forward_folds,
                     cfg.spread_bps,
                     cfg.slippage_bps,
                 )
 
-            # Macro API calls are rate-limited to every five cycles, but cached
-            # frames are revalidated for freshness on every decision below.
             if cycle == 0 or cycle % 5 == 0:
                 dxy = revalidate_optional_macro(
                     quality,
@@ -244,7 +218,6 @@ def run() -> None:
                 time.sleep(cfg.poll_seconds)
                 continue
 
-            # Cached context must still be fresh now, not merely when it was fetched.
             dxy_for_decision = revalidate_optional_macro(quality, dxy, cfg.macro_interval, decision_now)
             yields_for_decision = revalidate_optional_macro(quality, yields, cfg.macro_interval, decision_now)
 
@@ -286,9 +259,6 @@ def run() -> None:
                     )
                 else:
                     emitted_at = datetime.now(timezone.utc)
-                    # Keep the original research holding horizon intact. The outcome
-                    # ledger anchors it to setup_candle_end, so send latency no longer
-                    # shifts the timeout window later than the backtest.
                     day_start, day_end = frequency.day_bounds_utc(emitted_at)
                     trades_today = outcomes.count_emitted_between(day_start, day_end)
                     frequency_decision = frequency.evaluate(emitted_at, trades_today)
@@ -348,7 +318,7 @@ def run() -> None:
                                 else:
                                     outcomes.mark_delivery_state(signal, signal_setup_at, "SENT", message_id)
             else:
-                log.info("No strategy passed research + market-context + risk thresholds")
+                log.info("No surviving strategy passed research + market-context + risk thresholds")
         except Exception:
             log.exception("Cycle failed")
         cycle += 1
