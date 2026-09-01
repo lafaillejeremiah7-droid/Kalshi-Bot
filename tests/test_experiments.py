@@ -3,6 +3,7 @@ import math
 import pytest
 
 from kalshi_research.research.experiments import (
+    ExperimentError,
     ExperimentPlan,
     TimedPrice,
     _asof_grid,
@@ -128,14 +129,8 @@ def test_probability_benchmark_skips_missing_labels_and_nonready_rows():
     assert report.candidate.count == 1
 
 
-def test_walkforward_probability_benchmark_evaluates_only_whole_test_markets():
-    market_ids = [f"m{i}" for i in range(5)]
-    rows = [
-        feature_row(market_id, 60, index + 1, brti=101 if index % 2 else 99)
-        for index, market_id in enumerate(market_ids)
-    ]
-    outcomes = {market_id: index % 2 for index, market_id in enumerate(market_ids)}
-    plan = ExperimentPlan(
+def small_walkforward_plan() -> ExperimentPlan:
+    return ExperimentPlan(
         decision_horizons_s=(60,),
         lead_lags_s=(0,),
         min_leadlag_pairs=3,
@@ -146,13 +141,54 @@ def test_walkforward_probability_benchmark_evaluates_only_whole_test_markets():
         step_markets=1,
     )
 
-    reports = benchmark_probability_walkforward(rows, outcomes, market_ids, plan)
+
+def test_walkforward_probability_benchmark_evaluates_only_whole_test_markets():
+    market_ids = [f"m{i}" for i in range(5)]
+    rows = [
+        feature_row(market_id, 60, index + 1, brti=101 if index % 2 else 99)
+        for index, market_id in enumerate(market_ids)
+    ]
+    outcomes = {market_id: index % 2 for index, market_id in enumerate(market_ids)}
+
+    reports = benchmark_probability_walkforward(
+        rows,
+        outcomes,
+        market_ids,
+        small_walkforward_plan(),
+    )
 
     assert len(reports) == 2
     for report in reports:
         assert set(report.benchmark.market_ids).issubset(set(report.test_market_ids))
         assert not set(report.train_market_ids) & set(report.test_market_ids)
         assert not set(report.validation_market_ids) & set(report.test_market_ids)
+
+
+def test_walkforward_rejects_duplicate_market_ids():
+    rows = [feature_row("m0", 60, 1), feature_row("m1", 60, 2)]
+    outcomes = {"m0": 0, "m1": 1}
+
+    with pytest.raises(ExperimentError, match="each market exactly once"):
+        benchmark_probability_walkforward(
+            rows,
+            outcomes,
+            ["m0", "m1", "m1", "m2"],
+            small_walkforward_plan(),
+        )
+
+
+def test_walkforward_fails_closed_when_plan_has_no_complete_fold():
+    market_ids = ["m0", "m1", "m2"]
+    rows = [feature_row(market_id, 60, index + 1) for index, market_id in enumerate(market_ids)]
+    outcomes = {market_id: index % 2 for index, market_id in enumerate(market_ids)}
+
+    with pytest.raises(ExperimentError, match="insufficient markets"):
+        benchmark_probability_walkforward(
+            rows,
+            outcomes,
+            market_ids,
+            small_walkforward_plan(),
+        )
 
 
 def test_asof_grid_never_uses_future_received_sample():
@@ -222,6 +258,9 @@ def test_receive_time_leadlag_finds_synthetic_one_second_lead():
     assert report.best_eligible is not None
     assert report.best_eligible.lag_s == 1
     assert report.best_eligible.correlation == pytest.approx(1.0, abs=1e-9)
+    assert report.best_significant is not None
+    assert report.best_significant.lag_s == 1
+    assert report.best_significant.significant
 
 
 def test_bonferroni_adjustment_is_never_smaller_than_raw_p_value():
@@ -244,7 +283,7 @@ def test_block_bootstrap_is_deterministic_for_fixed_plan_seed():
     assert first == second
 
 
-def test_leadlag_marks_insufficient_pair_count_ineligible():
+def test_leadlag_marks_insufficient_pair_count_ineligible_without_inference():
     leader, follower = delayed_series(length=8)
     plan = ExperimentPlan(
         decision_horizons_s=(60,),
@@ -260,3 +299,34 @@ def test_leadlag_marks_insufficient_pair_count_ineligible():
     report = scan_receive_time_lead_lag(leader, follower, plan)
 
     assert all(not result.eligible for result in report.results)
+    assert all(result.raw_p_value is None for result in report.results)
+    assert all(result.bonferroni_p_value is None for result in report.results)
+    assert all(result.bootstrap_ci_low is None for result in report.results)
+    assert all(result.bootstrap_ci_high is None for result in report.results)
+    assert report.best_significant is None
+
+
+def test_leadlag_keeps_valid_follower_tail_after_leader_series_ends():
+    leader_prices = [100.0, 101.0, 99.0, 102.0, 98.0, 103.0]
+    leader = [TimedPrice(index * NS, price) for index, price in enumerate(leader_prices)]
+    follower_prices = [leader_prices[0], *leader_prices]
+    follower = [TimedPrice(index * NS, price) for index, price in enumerate(follower_prices)]
+    plan = ExperimentPlan(
+        decision_horizons_s=(60,),
+        lead_lags_s=(1,),
+        grid_step_s=1,
+        max_asof_age_s=0.5,
+        min_leadlag_pairs=3,
+        bootstrap_samples=20,
+        bootstrap_block_size=2,
+        min_train_markets=2,
+        validation_markets=1,
+        test_markets=1,
+        step_markets=1,
+    )
+
+    report = scan_receive_time_lead_lag(leader, follower, plan)
+
+    assert report.results[0].pairs == 5
+    assert report.results[0].correlation == pytest.approx(1.0, abs=1e-12)
+    assert report.results[0].eligible
