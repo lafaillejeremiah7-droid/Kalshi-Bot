@@ -3,11 +3,19 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+from pathlib import Path
 
 from kalshi_research.capture.external_runner import run_external_capture
 from kalshi_research.capture.runner import discover_open_btc15m_market, run_kalshi_capture
 from kalshi_research.config import ResearchConfig
 from kalshi_research.feeds.kalshi_rest import KalshiRestClient
+from kalshi_research.research.runner import (
+    ResearchRunError,
+    research_report_digest,
+    research_report_json,
+    run_research_store,
+)
+from kalshi_research.storage.sqlite_store import SqliteEventStore
 
 
 def cmd_probe(args: argparse.Namespace) -> int:
@@ -76,6 +84,58 @@ def cmd_capture_external(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_research_run(args: argparse.Namespace) -> int:
+    if args.db:
+        db_path = Path(args.db).expanduser()
+    else:
+        config = ResearchConfig.from_env()
+        config.ensure_research_dirs()
+        db_path = config.research_db_path
+
+    if not db_path.exists():
+        print(
+            json.dumps(
+                {
+                    "status": "blocked",
+                    "mode": "research_only",
+                    "order_placement": False,
+                    "research_db": str(db_path),
+                    "reason": "research_db_not_found",
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 2
+
+    try:
+        with SqliteEventStore(db_path) as store:
+            report = run_research_store(store)
+    except ResearchRunError as exc:
+        print(
+            json.dumps(
+                {
+                    "status": "blocked",
+                    "mode": "research_only",
+                    "order_placement": False,
+                    "research_db": str(db_path),
+                    "reason": str(exc),
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 2
+
+    payload = {
+        "status": "passed",
+        "report_digest": research_report_digest(report),
+        "report": json.loads(research_report_json(report)),
+    }
+    print(json.dumps(payload, indent=2, sort_keys=True, allow_nan=False))
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Kalshi BTC15m research utilities")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -116,6 +176,19 @@ def main() -> int:
         help="Optional message limit for controlled research samples",
     )
     external.set_defaults(func=cmd_capture_external)
+
+    research_run = sub.add_parser(
+        "research-run",
+        help=(
+            "Run the predeclared fail-closed research suite from stored events; "
+            "never places orders"
+        ),
+    )
+    research_run.add_argument(
+        "--db",
+        help="Optional research SQLite path; defaults to the configured research DB",
+    )
+    research_run.set_defaults(func=cmd_research_run)
 
     args = parser.parse_args()
     return args.func(args)
