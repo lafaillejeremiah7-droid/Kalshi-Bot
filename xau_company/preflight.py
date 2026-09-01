@@ -17,7 +17,7 @@ def _required(name: str) -> str:
 
 def check_dukascopy() -> tuple[float, str]:
     symbol = os.getenv("SYMBOL", "XAU/USD")
-    client = DukascopyClient(timeout=20, retries=2, max_workers=2)
+    client = DukascopyClient(timeout=20, retries=4, max_workers=1)
     candles = client.candles(symbol, "1min", 10)
     if candles.empty:
         raise RuntimeError("Dukascopy returned no XAU/USD minute candles")
