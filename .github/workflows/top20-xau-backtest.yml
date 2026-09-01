@@ -1,0 +1,49 @@
+name: Top 20 XAUUSD Mathematical Backtest
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - scripts/top20_xau_backtest.py
+      - .github/workflows/top20-xau-backtest.yml
+
+permissions:
+  contents: read
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Compile study
+        run: python -m py_compile scripts/top20_xau_backtest.py xau_company/backtest.py
+      - name: Run 20 independent mathematical backtests
+        run: python scripts/top20_xau_backtest.py
+      - name: Validate report invariants
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p = Path('top20-xau-backtest-report.json')
+          data = json.loads(p.read_text())
+          assert data['methodology']['strategy_count'] == 20
+          assert data['methodology']['parameter_trials_per_strategy'] == 1
+          assert data['methodology']['rank_uses_holdout'] is False
+          assert len(data['strategies']) == 20
+          assert all(r['lookahead_check'] == 'passed' for r in data['strategies'])
+          print('report invariants passed')
+          PY
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: top20-xau-backtest-report
+          path: top20-xau-backtest-report.json
+          if-no-files-found: error
+          retention-days: 30
