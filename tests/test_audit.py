@@ -7,7 +7,6 @@ from kalshi_research.domain.events import (
     OrderbookSnapshotEvent,
     PriceLevel,
     SettlementEvent,
-    Source,
 )
 from kalshi_research.research.audit import AuditPolicy, audit_events
 
