@@ -1,150 +1,96 @@
 # XAU/USD Multi-Agent Signal Company
 
-A research-first XAU/USD signal engine. The company researches a large adaptive strategy universe, validates candidates with conservative lifecycle simulation and chronological walk-forward folds, diagnoses current market conditions, then lets the Selector/Boss authorize at most two qualified Telegram signals per local trading day.
+A research-first XAU/USD signal engine built around a fixed catalog of **437 distinct strategy methodologies**. The company does not treat parameter changes as new strategies. Historical selection is chronological and fail-closed: a strategy must survive the canonical XAUUSD audit before it can appear in the live research catalog.
 
-The framework produces research signals only. It does not place brokerage orders and does not guarantee profit.
+The framework produces research signals only. It does not guarantee profit.
+
+## Canonical strategy policy
+
+- Exactly **437** canonical strategy IDs: `S001` through `S437`.
+- One ID represents one methodology.
+- Parameter combinations never create additional strategy IDs.
+- The historical audit may retain at most **109 strategies** (25% of 437, rounded down).
+- Strategies requiring unavailable data are rejected rather than tested with fabricated proxy inputs.
+- Live research reads only `xau_company/surviving_strategies.json`; an empty or missing survivor set means no strategy is live-eligible.
+
+The canonical catalog is defined in `xau_company/canonical_strategies.py`. Deterministic signal logic is implemented in `xau_company/canonical_strategy_engine.py`.
+
+## Historical audit
+
+`scripts/canonical_437_backtest.py` evaluates the canonical catalog against historical XAUUSD data with these safeguards:
+
+- closed-bar signals only;
+- next-bar-open entry;
+- spread and slippage charged;
+- ATR-based stop and target geometry;
+- stop-first handling when an OHLC bar touches stop and target;
+- chronological development, selection, and untouched holdout periods;
+- anti-lookahead prefix checks for every executable strategy;
+- one statistical trial per canonical methodology;
+- Benjamini-Hochberg multiple-testing diagnostics;
+- top-quartile selection frozen before the holdout is inspected;
+- the holdout may reject a selected strategy but can never promote a replacement.
+
+The workflow `.github/workflows/canonical-437-backtest.yml` publishes:
+
+- `canonical-437-backtest-report.json`
+- `xau_company/surviving_strategies.json`
+
+The survivor count can be lower than 109. It can never be higher.
 
 ## Signal pipeline
 
 1. **Market Data Bot** fetches XAU/USD OHLC data, optional DXY/yield context, and a fresh reference price.
-2. **Market Data Quality Guard** validates candle geometry/timestamps, removes still-forming candles, rejects stale required frames, and blocks closed/maintenance sessions.
-3. **Strategy Research Lab** evaluates up to `MAX_CANDIDATES` from the original 27,801 seed variants plus persistent evolved and invented strategies.
-4. **Backtest Auditor** uses next-bar entry, spread/slippage, ATR stop/target geometry, non-overlapping trades and conservative same-bar TP/SL ordering.
-5. **Strategy Discovery & Evolution Bot** combines validated strategies into cross-family ensembles. New ideas start `EXPERIMENTAL`.
-6. **Strategy Invention Bot** creates genuinely new formula families from primitive market features, then creates parameter variants of those formulas. It has 1,980 structural family templates in its current grammar.
-7. **Overfit Auditor** applies hard OOS quality gates plus a multiplicity penalty based on the persistent lifetime number of tested strategies. Evolution and Invention share the same gate.
-8. **Regime / specialist / timeframe / macro / risk desks** analyze the current completed research candle and surrounding context.
-9. **Strategy Selector** scores only live-eligible strategies. Experimental dynamic strategies are invisible until explicitly promoted.
-10. **Boss** requires the configured consensus exactly, uses a fresh reference price for Entry, and uses the same ATR stop multiplier and R:R assumptions as the research backtester.
-11. **Outcome & Calibration Bot** calibrates the Selector score from confirmed forward outcomes.
-12. **Trade Frequency Guard + outcome ledger** atomically reserve the setup and daily slot before delivery.
-13. **Telegram** receives the final authorized signal. Telegram is delivery infrastructure, not a trading employee.
+2. **Market Data Quality Guard** validates candle geometry/timestamps, drops still-forming candles, rejects stale required frames, and blocks closed/maintenance sessions.
+3. **Strategy Research Lab** evaluates only historically surviving canonical strategies.
+4. **Backtest/Overfit Auditor** applies chronological OOS quality gates to the survivor set.
+5. **Regime, specialist, timeframe, macro, and risk desks** analyze current completed candles and context.
+6. **Strategy Selector** scores only live-eligible canonical strategies.
+7. **Boss** requires configured consensus and uses the same ATR stop multiplier and reward/risk assumptions used by research.
+8. **Outcome & Calibration Bot** calibrates selection scores from confirmed forward outcomes.
+9. **Trade Frequency Guard + outcome ledger** atomically reserve the setup and daily slot before delivery.
+10. **Telegram or paper mode** receives the final authorized signal.
 
-The animated dashboard now represents **28 working employees**, including the separate Strategy Invention Bot. Dashboard telemetry remains read-only/fail-open and never participates in signal authorization.
+The dashboard is read-only telemetry and never authorizes a trade.
 
 ## Data synchronization and setup identity
 
-All strategy, regime and specialist logic works from completed candles only. Required `RESEARCH_INTERVAL`, 1h and 4h context must be present and fresh, and at least one fresh 1m/5m execution frame must exist.
+All strategy, regime, and specialist logic operates on completed candles. Required `RESEARCH_INTERVAL`, 1h, and 4h context must be present and fresh, and at least one fresh 1m/5m execution frame must exist.
 
-A company setup is identified by **symbol + completed research-candle timestamp**. Only one authorization may be emitted for that research candle even if, during later polling, the preferred strategy, direction, quote, stop or target changes. `MAX_SIGNAL_DELAY_MINUTES` prevents sending a setup too long after its research candle closed.
+A setup is identified by **symbol + completed research-candle timestamp**. Only one authorization may be emitted for a research candle even if a later polling cycle changes the preferred strategy, quote, stop, or target.
 
-The final Entry comes from Dukascopy's most recent valid tick data rather than simply reusing the last candle close. The framework still labels the signal as research-only because a reference price is not a guaranteed executable broker fill.
-
-Cached DXY/yield frames are revalidated on every decision cycle. The API call may be rate-limited to every five cycles, but stale cached macro data is discarded instead of continuing to influence a decision.
-
-## Strategy universe
-
-### Fixed seed universe
-
-The original research engine contains **11 strategy families and 27,801 fixed parameterized variants**. The configured default evaluates up to 20,000 candidates per research cycle with balanced sampling and retains a bounded research catalog.
-
-### Strategy Discovery & Evolution Bot
-
-Evolution creates new cross-family ensembles from validated strategies. Current modes are:
-
-- `confirm` — both parents must agree.
-- `primary_filter` — the primary may fire only if the secondary does not oppose it.
-- `consensus_or` — either may fire if the other does not contradict it.
-
-Promoted invented strategies may be used as finite parents in an evolved strategy, but recursive ensemble-of-ensemble chains are rejected to keep evaluation cost and audit attribution bounded.
-
-### Strategy Invention Bot
-
-Invention is separate from Evolution. It does not merely recombine existing strategy outputs. It builds formulas from three directional feature blocks plus a volatility gate and decision logic.
-
-Current directional feature primitives include:
-
-- EMA gap and EMA slope;
-- momentum;
-- RSI trend and RSI reversion;
-- z-score trend and z-score reversion;
-- Donchian breakout and fade;
-- candle impulse;
-- range location.
-
-Current gates are `none`, `atr_expansion`, `atr_normal`, and `atr_compression`. Current logic modes are `all`, `majority`, and `lead_confirm`. Choosing 3 of 11 features across 4 gates and 3 logic modes creates **1,980 distinct structural family templates** before parameter variants.
-
-Defaults are:
-
-- `INVENTED_FAMILIES_PER_CYCLE=6`
-- `INVENTED_VARIANTS_PER_FAMILY=8`
-- up to 48 newly persisted invented variants per research cycle while capacity remains.
-
-Every invented variant starts `EXPERIMENTAL`, is backtested on a later research run, and must pass the shared Overfit Auditor before it can enter the Selector-visible catalog. A promoted invention that later deteriorates becomes `QUARANTINED`. The persistent invention cursor recovers from the library itself if metadata lags after a crash, preventing duplicate family regeneration.
-
-## Promotion and multiple-testing safety
-
-Only the original seed families are inherently eligible for the research live catalog. `ensemble` and `invented` candidates require a matching `PROMOTED` key from their persistent library.
-
-The Overfit Auditor checks multiplicity-adjusted score, profit factor, average R, actual OOS trade count, walk-forward dispersion, train/OOS gap, drawdown, loss streak and minimum fold count.
-
-A single persistent lifetime tested-trial ledger is used for both Evolution and Invention, so adding a new search source cannot reset the multiple-testing penalty.
-
-Promoted and quarantined history is protected from experimental-library pruning. Experimental queues rotate old unpromoted entries when full so discovery can continue.
+Cached DXY/yield frames are revalidated on every decision cycle. Stale optional macro data is discarded rather than allowed to influence a decision.
 
 ## Research and live risk model
 
-Research uses expanding chronological walk-forward validation. A candidate must have enough usable OOS folds/trades to survive. Its score incorporates OOS hit rate, sample size, profit factor, average R, expectancy, drawdown, loss streak, fold coverage/stability and regime diversity.
-
-Research lifecycle rules include:
+Research uses chronological walk-forward validation. The lifecycle simulator enforces:
 
 - signal known only after a completed candle;
 - entry on the next bar;
-- spread and slippage charged;
-- stop/target based on ATR information known at the signal candle;
-- same candle touching TP and SL is treated as stop-first;
-- only one simulated position at a time;
-- family-specific maximum holding horizon.
+- spread and slippage;
+- stop/target derived from information available at the signal candle;
+- conservative stop-first same-bar collision handling;
+- one simulated position at a time;
+- strategy-specific maximum holding horizon.
 
 The Boss uses the same `BACKTEST_STOP_ATR` and `BACKTEST_REWARD_RISK` values as research.
 
-Forward outcome tracking is anchored to the **end of the research setup candle**, not Telegram send time. If neither TP nor SL is hit by the research holding horizon, the forward ledger uses the last completed close at/before the horizon and classifies the timeout as WIN/LOSS in the same directional way as the research backtester. `EXPIRED` is reserved for cases where sufficient close data is unavailable.
-
-## Selector evidence
-
-For every active live-eligible strategy, the Selector combines:
-
-- walk-forward OOS hit rate;
-- research score;
-- current family/regime fit and regime-specific OOS history;
-- specialist directional support/opposition;
-- weighted 1m/5m/15m/1h/4h alignment;
-- DXY/yield macro alignment;
-- profit factor;
-- walk-forward stability;
-- lifecycle quality from average R, drawdown and loss streak;
-- OOS sample-size trust.
-
-Timeframe and macro votes are not counted again as generic analysts. Invented and ensemble strategies use neutral structural regime priors unless/until their own historical regime evidence differentiates them. The highest score remains a **heuristic selection score**, not a guaranteed win probability. Confirmed forward outcomes are used afterward for calibration.
-
 ## Forward outcome and delivery safety
 
-Before a qualifying signal is sent, SQLite uses `BEGIN IMMEDIATE` to atomically check both setup deduplication and the daily signal cap, then reserves the slot.
+Forward outcome tracking is anchored to the end of the research setup candle. If neither TP nor SL is reached by the research holding horizon, the last usable close at or before the horizon is used consistently with the research lifecycle.
 
-Delivery states are:
+Before a signal is sent, SQLite atomically checks setup deduplication and the daily cap, then reserves the slot. Delivery states distinguish confirmed sends, definitive failures, and uncertain delivery so duplicate messages are not emitted after crashes.
 
-- `RESERVED` — slot claimed immediately before delivery;
-- `SENT` — Telegram/paper delivery confirmed;
-- `UNKNOWN` — delivery may have succeeded but acknowledgement was lost; the slot remains consumed to prevent duplicate sends;
-- `FAILED` — definitive delivery rejection; the reservation may be replaced after configuration is corrected.
-
-On restart, abandoned reservations become `UNKNOWN`, which is conservative: they cannot be resent or reuse the daily slot, and they are excluded from probability calibration.
-
-If the emission occurred inside a resolution OHLC candle that hit TP/SL, the result is marked `AMBIGUOUS` because OHLC cannot establish whether the hit happened before or after the actual send. Ambiguous and unknown-delivery rows do not train calibration.
-
-Outcome recovery prefers completed **1-minute** history and automatically falls back to completed **5-minute** history if the 1-minute feed is unavailable/unhealthy. Output size is calculated from the configured outcome window and actual resolution interval, capped at the provider's 5,000-bar limit.
-
-Telegram signal text is capped at 3,900 characters. Critical Action/Entry/TP/SL/confidence/risk fields are emitted before optional reasons, so verbose strategy labels or explanations cannot trigger a predictable Telegram message-length rejection.
+Outcome recovery prefers completed 1-minute history and falls back to completed 5-minute history when needed.
 
 ## Trade frequency policy
 
 The company never forces a trade.
 
 - Monday-Friday accounting in `TRADE_TIMEZONE`.
-- Default: `America/Chicago`.
-- 0, 1 or 2 qualified signals can be emitted in a local day.
+- Default timezone: `America/Chicago`.
+- Zero, one, or two qualified signals may be emitted in a local trading day.
 - `MAX_TRADES_PER_DAY=2` is a hard maximum.
-- Atomic reservation prevents two processes sharing the same SQLite database from simultaneously claiming the same final slot.
 
 ## Core settings
 
@@ -156,22 +102,9 @@ CONTEXT_OUTPUT_SIZE=500
 POLL_SECONDS=60
 MIN_CONFIDENCE=0.72
 MIN_CONSENSUS=3
-MAX_CANDIDATES=20000
-RESEARCH_CATALOG_SIZE=600
 WALK_FORWARD_FOLDS=4
 MIN_WALK_FORWARD_FOLDS=2
 RESEARCH_EVERY_CYCLES=60
-
-ENABLE_STRATEGY_EVOLUTION=true
-STRATEGY_LIBRARY_PATH=data/discovered_strategies.json
-DISCOVERIES_PER_CYCLE=250
-DISCOVERY_LIBRARY_SIZE=5000
-
-ENABLE_STRATEGY_INVENTION=true
-INVENTION_LIBRARY_PATH=data/invented_strategies.json
-INVENTED_FAMILIES_PER_CYCLE=6
-INVENTED_VARIANTS_PER_FAMILY=8
-INVENTION_LIBRARY_SIZE=4000
 
 OVERFIT_MIN_ADJUSTED_SCORE=0.60
 OVERFIT_MIN_PROFIT_FACTOR=1.15
@@ -206,31 +139,20 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Fill in `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`. Dukascopy market data is keyless. Keep `PAPER_MODE=true` until enough forward evidence exists.
-
 Run the company:
 
 ```bash
 python main.py
 ```
 
-Run the animated operations floor separately:
+Run the dashboard separately:
 
 ```bash
 python dashboard_server.py
 ```
 
-Then open `http://127.0.0.1:8080`.
+CI compiles the runtime and runs the complete pytest suite.
 
-CI compiles `main.py`, `xau_company` and all tests before running the complete pytest suite.
+## Safety status
 
-## Remaining production work
-
-- Automatic high-impact economic-calendar ingestion; current event blackout list is manually configured.
-- Formal Deflated-Sharpe/PBO-style diagnostics and purged/embargoed validation.
-- Persistent robust research catalog across restarts.
-- Strategy correlation/agreement model to distinguish independent confirmation from redundant strategies.
-- Optional source-backed research scout for public strategy concepts; current Invention Bot generates formulas internally rather than browsing external research.
-- Verified durable hosting/service deployment and durable runtime storage before any claim of continuous operation.
-
-This is a research framework, not a guarantee of profit.
+The live company should remain disabled while a canonical historical audit is being rebuilt or while the survivor file is empty. Historical results are evidence, not a guarantee of future performance.
