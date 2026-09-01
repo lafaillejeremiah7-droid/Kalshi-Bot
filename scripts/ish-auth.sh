@@ -3,6 +3,7 @@ set -euo pipefail
 
 REPO="lafaillejeremiah7-droid/XAUUSD-Company"
 command -v curl >/dev/null 2>&1 || { echo "curl is missing. Run: bash scripts/install-ish.sh" >&2; exit 1; }
+command -v python3 >/dev/null 2>&1 || { echo "python3 is missing. Run: bash scripts/install-ish.sh" >&2; exit 1; }
 
 printf 'Paste your GitHub fine-grained token (input hidden): '
 IFS= read -r -s token
@@ -20,7 +21,26 @@ if [[ "$status" != "200" ]]; then
   rm -f /tmp/xau-auth-check.json
   exit 1
 fi
+
+push_allowed="$(python3 - <<'PY'
+import json
+from pathlib import Path
+p = Path('/tmp/xau-auth-check.json')
+try:
+    data = json.loads(p.read_text())
+except Exception:
+    print('false')
+else:
+    print('true' if data.get('permissions', {}).get('push') is True else 'false')
+PY
+)"
 rm -f /tmp/xau-auth-check.json
+if [[ "$push_allowed" != "true" ]]; then
+  echo "Token can read XAUUSD-Company but cannot write to it." >&2
+  echo "Recreate/edit the fine-grained token with repository access to XAUUSD-Company and Contents: Read and write." >&2
+  echo "Also set Actions: Read and write so xau can start/stop workflow sessions." >&2
+  exit 1
+fi
 
 CONFIG_DIR="$HOME/.config/xau"
 AUTH_FILE="$CONFIG_DIR/auth.env"
@@ -42,6 +62,6 @@ fi
 git config user.name "XAUUSD iSH Controller"
 git config user.email "xauusd-controller@users.noreply.github.com"
 
-echo "GitHub token verified and saved securely (mode 600)."
+echo "GitHub token verified with repository write access and saved securely (mode 600)."
 echo "GitHub CLI login is not required on iSH."
 echo "Next: . ~/.profile && xau status"
