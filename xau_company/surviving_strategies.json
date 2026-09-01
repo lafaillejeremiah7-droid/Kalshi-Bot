@@ -1,8 +1,0 @@
-{
-  "schema_version": 1,
-  "source": "canonical-437-backtest-report.json",
-  "canonical_count": 437,
-  "max_survivors": 109,
-  "survivor_count": 0,
-  "survivors": []
-}
