@@ -27,9 +27,10 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          # The Actions token cannot create/delete workflow files. Keep those
-          # unchanged here; they are migrated separately through the GitHub API.
+          # Workflow YAML is migrated separately through the GitHub API because
+          # the Actions token has contents:write but no workflows permission.
           git checkout -- .github/workflows
+          rm -f .github/workflows/canonical-437-backtest.yml
           git add -A
           git commit -m "Replace parameter-grid strategies with canonical 437"
           git push origin HEAD:main
