@@ -1,6 +1,7 @@
 {
-  "active": true,
-  "url": "https://asking-vessel-rogers-youth.trycloudflare.com",
-  "run_id": "33489273810",
-  "started_at": "2026-09-01T08:52:58.725588Z"
+  "active": false,
+  "url": null,
+  "run_id": null,
+  "started_at": null,
+  "stopped_reason": "Company stopped for full historical XAUUSD backtest"
 }
