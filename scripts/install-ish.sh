@@ -11,7 +11,7 @@ cd "$ROOT"
 
 echo "Installing iSH control dependencies..."
 apk update
-apk add bash git python3 curl ca-certificates github-cli
+apk add bash git python3 curl ca-certificates
 
 chmod +x bin/xau scripts/ish-auth.sh scripts/git-askpass.sh
 mkdir -p "$HOME/.local/bin"
@@ -41,4 +41,4 @@ echo "  5. xau start"
 echo "  6. xau dashboard"
 echo "  7. xau stop"
 echo
-echo "No 'gh auth setup-git' command is required on iSH."
+echo "GitHub CLI login is not required on iSH."
