@@ -65,13 +65,17 @@ jobs:
           restore-keys: |
             xau-runtime-state-
 
-      - name: Verify Dukascopy live data and Telegram
+      - name: Verify Telegram credentials
         if: steps.control.outputs.enabled == 'true'
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          SYMBOL: XAU/USD
-        run: python -m xau_company.preflight
+        run: |
+          python - <<'PY'
+          from xau_company.preflight import check_telegram
+          check_telegram()
+          print("Telegram preflight: OK (bot token and chat reachable; no message sent)")
+          PY
 
       - name: Start dashboard server
         if: steps.control.outputs.enabled == 'true'
@@ -152,6 +156,18 @@ jobs:
           git add dashboard-live.json
           git commit -m "Publish live dashboard URL [skip ci]"
           git push origin HEAD:main
+
+      - name: Check market-data readiness
+        if: steps.control.outputs.enabled == 'true'
+        continue-on-error: true
+        env:
+          SYMBOL: XAU/USD
+        run: |
+          python - <<'PY'
+          from xau_company.preflight import check_dukascopy_with_retries
+          price, stamp = check_dukascopy_with_retries()
+          print(f"Dukascopy readiness: OK (XAU/USD price={price:.2f}, latest_1m={stamp})")
+          PY
 
       - name: Run company until OFF
         if: steps.control.outputs.enabled == 'true'
