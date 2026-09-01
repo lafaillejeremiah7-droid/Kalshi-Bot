@@ -76,6 +76,7 @@ jobs:
               text = p.read_text(encoding='utf-8')
               text = text.replace('.candidate.family', '.candidate.strategy_id')
               text = text.replace('c.family for c in candidates', 'c.strategy_id for c in candidates')
+              text = text.replace('c.family for c in selected', 'c.strategy_id for c in selected')
               p.write_text(text, encoding='utf-8')
 
           p = Path('tests/test_canonical_strategies.py')
