@@ -1,0 +1,45 @@
+name: Dukascopy Live Smoke
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "xau_company/data.py"
+      - "xau_company/config.py"
+      - ".github/workflows/dukascopy-smoke.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live-data:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Fetch keyless XAUUSD data
+        run: |
+          python - <<'PY'
+          from xau_company.data import DukascopyClient
+
+          client = DukascopyClient(timeout=20, retries=2, max_workers=4)
+          frame = client.candles("XAU/USD", "1min", 20)
+          if frame.empty or len(frame) < 5:
+              raise SystemExit("Dukascopy returned insufficient XAU/USD minute data")
+          price = client.price("XAU/USD")
+          if price <= 0:
+              raise SystemExit("Dukascopy returned an invalid XAU/USD price")
+          latest = frame["datetime"].iloc[-1]
+          print(f"Dukascopy XAU/USD OK rows={len(frame)} latest={latest} price={price:.3f}")
+
+          dxy = client.safe_candles("DXY", "1h", 5)
+          if dxy is None or dxy.empty:
+              print("Dukascopy DXY optional context unavailable in this run")
+          else:
+              print(f"Dukascopy DXY OK rows={len(dxy)} latest={dxy['datetime'].iloc[-1]}")
+          PY
