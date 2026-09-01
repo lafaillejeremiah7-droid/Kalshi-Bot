@@ -315,6 +315,7 @@ def main() -> None:
             yearly=yearly,
             selection_score=_selection_score(sel_m, yearly),
             selection_p_value=_normal_positive_edge_pvalue(selection),
+            holdout_p_value=_normal_positive_edge_pvalue(holdout),
         )
         rows.append(row)
         print(
@@ -349,13 +350,7 @@ def main() -> None:
     survivors: list[dict[str, object]] = []
     for r in frozen_top:
         hold = r["holdout"]
-        holdout_p_value = _normal_positive_edge_pvalue(_subset(
-            BACKTESTER.simulate(xau, engine.signal(next(s for s in STRATEGIES if s.strategy_id == r["strategy_id"])), atr_values, next(s for s in STRATEGIES if s.strategy_id == r["strategy_id"]).horizon),
-            xau.datetime,
-            HOLDOUT_START,
-            None,
-        ))
-        r["holdout_p_value"] = holdout_p_value
+        holdout_p_value = float(r.get("holdout_p_value", 1.0))
         holdout_gate = bool(
             int(hold["trades"]) >= MIN_HOLDOUT_TRADES
             and float(hold["avg_r"]) > 0.0
