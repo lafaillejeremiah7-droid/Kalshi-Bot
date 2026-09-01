@@ -19,6 +19,10 @@ apk add bash git python3 curl ca-certificates
 git config core.fileMode false
 
 mkdir -p "$HOME/.local/bin"
+# Older installs used a symlink here. Remove it first so a broken link does not
+# cause the shell to follow a deleted nested-repository path when writing the
+# new wrapper.
+rm -f "$HOME/.local/bin/xau"
 cat > "$HOME/.local/bin/xau" <<EOF
 #!/bin/sh
 exec bash "$ROOT/bin/xau" "\$@"
