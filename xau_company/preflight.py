@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import os
+import time
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Callable
 
 import pandas as pd
 import requests
@@ -63,6 +64,32 @@ def check_dukascopy() -> tuple[float, str]:
     return price, stamp
 
 
+def check_dukascopy_with_retries(
+    attempts: int = 3,
+    delay_seconds: float = 3.0,
+    check: Callable[[], tuple[float, str]] = check_dukascopy,
+) -> tuple[float, str]:
+    """Fail closed only after repeated independent Dukascopy readiness failures."""
+    if attempts < 1:
+        raise ValueError("attempts must be at least 1")
+    last_error: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return check()
+        except Exception as exc:
+            last_error = exc
+            if attempt >= attempts:
+                break
+            print(
+                f"Dukascopy preflight attempt {attempt}/{attempts} failed; retrying: {exc}",
+                flush=True,
+            )
+            time.sleep(max(0.0, delay_seconds))
+    raise RuntimeError(
+        f"Dukascopy preflight failed after {attempts} attempts: {last_error}"
+    ) from last_error
+
+
 def check_telegram(session: Any = requests) -> None:
     token = _required("TELEGRAM_BOT_TOKEN")
     chat_id = _required("TELEGRAM_CHAT_ID")
@@ -85,7 +112,7 @@ def run() -> int:
     check_telegram()
     print("Telegram preflight: OK (bot token and chat reachable; no message sent)")
 
-    price, stamp = check_dukascopy()
+    price, stamp = check_dukascopy_with_retries()
     print(
         f"Dukascopy preflight: OK ({os.getenv('SYMBOL', 'XAU/USD')} "
         f"price={price:.2f}, latest_1m={stamp})"
