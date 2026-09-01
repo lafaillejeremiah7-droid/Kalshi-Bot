@@ -28,6 +28,7 @@ jobs:
       CANONICAL_437_REPORT: canonical-437-backtest-report.json
       CANONICAL_437_SURVIVORS: xau_company/surviving_strategies.json
       BACKTEST_CACHE: /tmp/xau-canonical-437
+      AUDIT_POLICY_VERSION: hardened-v2
     steps:
       - uses: actions/checkout@v4
         with:
