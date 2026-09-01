@@ -13,9 +13,17 @@ echo "Installing iSH control dependencies..."
 apk update
 apk add bash git python3 curl ca-certificates
 
-chmod +x bin/xau scripts/ish-auth.sh scripts/git-askpass.sh
+# iSH can report executable-bit changes as working-tree edits. The controller
+# is launched through a wrapper, so file-mode differences inside the clone do
+# not need to participate in Git status checks.
+git config core.fileMode false
+
 mkdir -p "$HOME/.local/bin"
-ln -sfn "$ROOT/bin/xau" "$HOME/.local/bin/xau"
+cat > "$HOME/.local/bin/xau" <<EOF
+#!/bin/sh
+exec bash "$ROOT/bin/xau" "\$@"
+EOF
+chmod 700 "$HOME/.local/bin/xau"
 
 PROFILE="$HOME/.profile"
 touch "$PROFILE"
