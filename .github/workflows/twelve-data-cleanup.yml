@@ -33,7 +33,7 @@ jobs:
                   raise SystemExit(f"Expected cleanup target not found in {path}: {old!r}")
               p.write_text(text.replace(old, new))
 
-          # Runtime: use the provider's real class directly with no obsolete API-key plumbing.
+          # Runtime: use the real keyless provider class directly.
           replace_exact(
               "main.py",
               "from xau_company.data import TwelveDataClient",
@@ -77,7 +77,7 @@ jobs:
               "\n",
           )
 
-          # Tests: delete compatibility-only tests and test the actual provider/config surface.
+          # Tests: remove migration-only arguments/tests and exercise the real surface.
           replace_exact(
               "tests/test_dukascopy_data.py",
               "from xau_company.data import DukascopyClient, TwelveDataClient",
@@ -92,6 +92,28 @@ jobs:
               "\n\ndef test_settings_validate_without_market_data_credentials() -> None:\n"
               "    Settings(paper_mode=True).validate()\n",
           )
+          replace_exact(
+              "tests/test_delivery_guards.py",
+              "        twelve_data_api_key=\"test\",\n",
+              "",
+          )
+          replace_exact(
+              "tests/test_preflight.py",
+              "    monkeypatch.delenv(\"TWELVE_DATA_API_KEY\", raising=False)\n",
+              "",
+          )
+          replace_exact(
+              "tests/test_synchronization.py",
+              "        twelve_data_api_key=\"test\",\n",
+              "",
+          )
+
+          # Provider-neutral quality logic should not name a retired vendor.
+          replace_exact(
+              "xau_company/quality.py",
+              "        # Twelve Data timestamps identify the candle start. Never let a still-forming\n",
+              "        # Provider timestamps identify the candle start. Never let a still-forming\n",
+          )
 
           # Documentation: describe the actual keyless provider and current setup.
           replace_exact(
@@ -105,7 +127,7 @@ jobs:
               "Fill in `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`. Dukascopy market data is keyless. Keep `PAPER_MODE=true` until enough forward evidence exists.",
           )
 
-          # Focused cleanup: remove stale migration naming anywhere else in tracked text files.
+          # Hard verification: no retired-provider names remain in tracked text files.
           forbidden = ("Twelve" + "Data", "Twelve Data", "TWELVE" + "_DATA", "twelve" + "_data")
           excluded = {Path(".github/workflows/twelve-data-cleanup.yml")}
           leftovers = []
@@ -137,7 +159,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add main.py README.md xau_company/config.py xau_company/data.py tests/test_dukascopy_data.py
+          git add main.py README.md xau_company/config.py xau_company/data.py xau_company/quality.py tests/test_dukascopy_data.py tests/test_delivery_guards.py tests/test_preflight.py tests/test_synchronization.py
           git diff --cached --check
           if git diff --cached --quiet; then
             echo "No cleanup changes to commit."
