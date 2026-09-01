@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+set -euo pipefail
+REPO="lafaillejeremiah7-droid/XAUUSD-Company"
+WORKFLOW="runtime-session.yml"
+die(){ echo "xau: $*" >&2; exit 1; }
+info(){ echo "xau: $*"; }
+SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
+ROOT="$(cd "$(dirname "$SCRIPT_PATH")/.." && pwd)"
+cd "$ROOT"
+need(){ command -v "$1" >/dev/null 2>&1 || die "'$1' is required. Run: bash scripts/install-linux.sh"; }
+need git; need gh; need python3
+ensure_gh_auth(){ gh auth status >/dev/null 2>&1 || die "GitHub CLI is not logged in. Run: gh auth login"; }
+ensure_clean(){ if ! git diff --quiet || ! git diff --cached --quiet; then die "repo has uncommitted changes. Commit/stash them before start/stop."; fi; }
+sync_main(){ ensure_clean; git checkout main >/dev/null 2>&1 || die "could not checkout main"; git pull --ff-only origin main; }
+remote_control_json(){ git fetch -q origin main; git show origin/main:runtime-control.json; }
+control_enabled_remote(){ remote_control_json | python3 -c 'import json,sys; print("true" if json.load(sys.stdin).get("enabled") is True else "false")'; }
+set_control(){ local enabled="$1" reason="$2"; python3 - "$enabled" "$reason" <<'PY'
+import json,sys
+from pathlib import Path
+enabled=sys.argv[1].lower()=="true"; reason=sys.argv[2]
+p=Path("runtime-control.json"); d=json.loads(p.read_text())
+d["enabled"]=enabled; d["generation"]=int(d.get("generation",0))+1; d["reason"]=reason
+p.write_text(json.dumps(d,indent=2)+"\n")
+print(f"runtime-control: {'ON' if enabled else 'OFF'} generation={d['generation']}")
+PY
+}
+active_run_ids(){ gh run list --repo "$REPO" --workflow "$WORKFLOW" --status in_progress --limit 20 --json databaseId --jq '.[].databaseId'; }
+queued_run_ids(){ gh run list --repo "$REPO" --workflow "$WORKFLOW" --status queued --limit 20 --json databaseId --jq '.[].databaseId'; }
+latest_run_id(){ gh run list --repo "$REPO" --workflow "$WORKFLOW" --limit 1 --json databaseId --jq '.[0].databaseId // empty'; }
+commit_control(){ local message="$1"; git add runtime-control.json; git commit -m "$message"; git push origin main; }
+cmd_start(){ ensure_gh_auth; sync_main; local enabled; enabled="$(python3 -c 'import json; print("true" if json.load(open("runtime-control.json")).get("enabled") is True else "false")')"; if [[ "$enabled" != "true" ]]; then set_control true "Started from Linux terminal"; commit_control "Turn XAUUSD company on"; info "ON request pushed. GitHub Actions is launching the company and dashboard."; else local active; active="$(active_run_ids | head -n1 || true)"; if [[ -n "$active" ]]; then info "company is already ON (runtime $active)."; else info "control is ON but no runtime is active; dispatching a fresh session."; gh workflow run "$WORKFLOW" --repo "$REPO" --ref main; fi; fi; info "use 'xau status' to watch startup and 'xau dashboard' for the host link."; }
+cmd_stop(){ ensure_gh_auth; mapfile -t old_active < <(active_run_ids || true); mapfile -t old_queued < <(queued_run_ids || true); sync_main; local enabled; enabled="$(python3 -c 'import json; print("true" if json.load(open("runtime-control.json")).get("enabled") is True else "false")')"; if [[ "$enabled" == "true" ]]; then set_control false "Stopped from Linux terminal"; commit_control "Turn XAUUSD company off"; info "OFF state pushed to main."; else info "control is already OFF."; fi; local id; for id in "${old_active[@]:-}" "${old_queued[@]:-}"; do [[ -n "$id" ]] || continue; info "cancelling old runtime $id"; gh run cancel "$id" --repo "$REPO" >/dev/null 2>&1 || true; done; info "company OFF requested; hosted dashboard tunnel will close with the runtime."; }
+cmd_status(){ ensure_gh_auth; git fetch -q origin main; git show origin/main:runtime-control.json | python3 -c 'import json,sys; d=json.load(sys.stdin); print("Control:","ON" if d.get("enabled") is True else "OFF"); print("Generation:",d.get("generation",0)); print("Reason:",d.get("reason",""))'; echo; gh run list --repo "$REPO" --workflow "$WORKFLOW" --limit 5; }
+cmd_dashboard(){ ensure_gh_auth; git fetch -q origin main; [[ "$(control_enabled_remote)" == true ]] || die "company control is OFF. Run 'xau start' first."; local active; active="$(active_run_ids | head -n1 || true)"; [[ -n "$active" ]] || die "runtime/dashboard is not active yet. Run 'xau status'."; local payload url active_flag; payload="$(git show origin/main:dashboard-live.json 2>/dev/null || true)"; [[ -n "$payload" ]] || die "dashboard URL has not been published yet."; read -r active_flag url < <(printf '%s' "$payload" | python3 -c 'import json,sys; d=json.load(sys.stdin); print("true" if d.get("active") is True else "false", d.get("url",""))'); [[ "$active_flag" == true && -n "$url" ]] || die "no active hosted dashboard URL is published yet."; echo "$url"; if [[ "${1:-}" == "--open" ]] && command -v xdg-open >/dev/null 2>&1; then xdg-open "$url" >/dev/null 2>&1 & fi; }
+cmd_logs(){ ensure_gh_auth; local run_id; run_id="$(latest_run_id)"; [[ -n "$run_id" ]] || die "no runtime workflow has run yet."; gh run view "$run_id" --repo "$REPO"; local status; status="$(gh run view "$run_id" --repo "$REPO" --json status --jq '.status')"; if [[ "$status" == completed ]]; then gh run view "$run_id" --repo "$REPO" --log; else info "runtime is active; full log download is available after completion."; fi; }
+cmd_update(){ sync_main; info "repository updated."; }
+cmd_test(){ [[ -x .venv/bin/python ]] || die "virtual environment missing. Run: bash scripts/install-linux.sh"; .venv/bin/python -m compileall -q main.py xau_company tests; .venv/bin/python -m pytest -q; }
+cmd_local_dashboard(){ [[ -x .venv/bin/python ]] || die "virtual environment missing. Run: bash scripts/install-linux.sh"; info "local dashboard: http://127.0.0.1:8080"; exec .venv/bin/python dashboard_server.py --host 127.0.0.1 --port 8080; }
+usage(){ cat <<'TXT'
+Usage:
+  xau start
+  xau stop
+  xau status
+  xau dashboard [--open]
+  xau logs
+  xau update
+  xau test
+  xau local-dashboard
+TXT
+}
+case "${1:-help}" in start|on) cmd_start;; stop|off) cmd_stop;; status) cmd_status;; dashboard) shift; cmd_dashboard "${1:-}";; logs) cmd_logs;; update) cmd_update;; test) cmd_test;; local-dashboard) cmd_local_dashboard;; help|-h|--help) usage;; *) usage; die "unknown command: ${1:-}";; esac
