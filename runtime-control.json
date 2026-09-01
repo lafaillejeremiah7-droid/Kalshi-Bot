@@ -1,5 +1,5 @@
 {
-  "enabled": true,
-  "generation": 8,
-  "reason": "Started from terminal"
+  "enabled": false,
+  "generation": 9,
+  "reason": "Stopped from terminal"
 }
