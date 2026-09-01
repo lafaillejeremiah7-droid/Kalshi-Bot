@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import json
 
+from kalshi_research.capture.external_runner import run_external_capture
 from kalshi_research.capture.runner import discover_open_btc15m_market, run_kalshi_capture
 from kalshi_research.config import ResearchConfig
 from kalshi_research.feeds.kalshi_rest import KalshiRestClient
@@ -52,12 +53,39 @@ def cmd_capture(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_capture_external(args: argparse.Namespace) -> int:
+    config = ResearchConfig.from_env()
+    config.ensure_research_dirs()
+    print(
+        json.dumps(
+            {
+                "mode": "research_capture_only",
+                "venue": args.venue,
+                "raw_capture_dir": str(config.raw_capture_dir / "external"),
+                "research_db": str(config.research_db_path),
+                "authentication_required": False,
+                "order_placement": False,
+            },
+            indent=2,
+        )
+    )
+    processed = asyncio.run(
+        run_external_capture(config, venue=args.venue, max_messages=args.max_messages)
+    )
+    print(json.dumps({"captured_messages": processed, "venue": args.venue}, indent=2))
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Kalshi BTC15m research utilities")
     sub = parser.add_subparsers(dest="command", required=True)
 
     probe = sub.add_parser("probe", help="Read current KXBTC15M public metadata only")
-    probe.add_argument("--status", choices=["unopened", "open", "closed", "settled"], default="open")
+    probe.add_argument(
+        "--status",
+        choices=["unopened", "open", "closed", "settled"],
+        default="open",
+    )
     probe.set_defaults(func=cmd_probe)
 
     capture = sub.add_parser(
@@ -75,6 +103,19 @@ def main() -> int:
         help="Optional message limit for controlled research samples",
     )
     capture.set_defaults(func=cmd_capture)
+
+    external = sub.add_parser(
+        "capture-external",
+        help="Capture public BTC market data from Coinbase or Kraken; never places orders",
+    )
+    external.add_argument("--venue", choices=["coinbase", "kraken"], required=True)
+    external.add_argument(
+        "--max-messages",
+        type=int,
+        default=None,
+        help="Optional message limit for controlled research samples",
+    )
+    external.set_defaults(func=cmd_capture_external)
 
     args = parser.parse_args()
     return args.func(args)
