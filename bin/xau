@@ -7,9 +7,21 @@ info(){ echo "xau: $*"; }
 SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
 ROOT="$(cd "$(dirname "$SCRIPT_PATH")/.." && pwd)"
 cd "$ROOT"
-need(){ command -v "$1" >/dev/null 2>&1 || die "'$1' is required. Run: bash scripts/install-linux.sh"; }
+need(){ command -v "$1" >/dev/null 2>&1 || die "'$1' is required. Run the platform installer in scripts/."; }
 need git; need gh; need python3
-ensure_gh_auth(){ gh auth status >/dev/null 2>&1 || die "GitHub CLI is not logged in. Run: gh auth login"; }
+
+if [[ -n "${GH_TOKEN:-}" ]]; then
+  export GIT_ASKPASS="$ROOT/scripts/git-askpass.sh"
+  export GIT_TERMINAL_PROMPT=0
+fi
+
+ensure_gh_auth(){
+  if [[ -n "${GH_TOKEN:-}" ]]; then
+    gh api "repos/$REPO" >/dev/null 2>&1 || die "GH_TOKEN is invalid or cannot access $REPO. Run: bash scripts/ish-auth.sh"
+  else
+    gh auth status >/dev/null 2>&1 || die "GitHub CLI is not authenticated. On iSH run: bash scripts/ish-auth.sh"
+  fi
+}
 ensure_clean(){ if ! git diff --quiet || ! git diff --cached --quiet; then die "repo has uncommitted changes. Commit/stash them before start/stop."; fi; }
 sync_main(){ ensure_clean; git checkout main >/dev/null 2>&1 || die "could not checkout main"; git pull --ff-only origin main; }
 remote_control_json(){ git fetch -q origin main; git show origin/main:runtime-control.json; }
@@ -28,8 +40,8 @@ active_run_ids(){ gh run list --repo "$REPO" --workflow "$WORKFLOW" --status in_
 queued_run_ids(){ gh run list --repo "$REPO" --workflow "$WORKFLOW" --status queued --limit 20 --json databaseId --jq '.[].databaseId'; }
 latest_run_id(){ gh run list --repo "$REPO" --workflow "$WORKFLOW" --limit 1 --json databaseId --jq '.[0].databaseId // empty'; }
 commit_control(){ local message="$1"; git add runtime-control.json; git commit -m "$message"; git push origin main; }
-cmd_start(){ ensure_gh_auth; sync_main; local enabled; enabled="$(python3 -c 'import json; print("true" if json.load(open("runtime-control.json")).get("enabled") is True else "false")')"; if [[ "$enabled" != "true" ]]; then set_control true "Started from Linux terminal"; commit_control "Turn XAUUSD company on"; info "ON request pushed. GitHub Actions is launching the company and dashboard."; else local active; active="$(active_run_ids | head -n1 || true)"; if [[ -n "$active" ]]; then info "company is already ON (runtime $active)."; else info "control is ON but no runtime is active; dispatching a fresh session."; gh workflow run "$WORKFLOW" --repo "$REPO" --ref main; fi; fi; info "use 'xau status' to watch startup and 'xau dashboard' for the host link."; }
-cmd_stop(){ ensure_gh_auth; mapfile -t old_active < <(active_run_ids || true); mapfile -t old_queued < <(queued_run_ids || true); sync_main; local enabled; enabled="$(python3 -c 'import json; print("true" if json.load(open("runtime-control.json")).get("enabled") is True else "false")')"; if [[ "$enabled" == "true" ]]; then set_control false "Stopped from Linux terminal"; commit_control "Turn XAUUSD company off"; info "OFF state pushed to main."; else info "control is already OFF."; fi; local id; for id in "${old_active[@]:-}" "${old_queued[@]:-}"; do [[ -n "$id" ]] || continue; info "cancelling old runtime $id"; gh run cancel "$id" --repo "$REPO" >/dev/null 2>&1 || true; done; info "company OFF requested; hosted dashboard tunnel will close with the runtime."; }
+cmd_start(){ ensure_gh_auth; sync_main; local enabled; enabled="$(python3 -c 'import json; print("true" if json.load(open("runtime-control.json")).get("enabled") is True else "false")')"; if [[ "$enabled" != "true" ]]; then set_control true "Started from terminal"; commit_control "Turn XAUUSD company on"; info "ON request pushed. GitHub Actions is launching the company and dashboard."; else local active; active="$(active_run_ids | head -n1 || true)"; if [[ -n "$active" ]]; then info "company is already ON (runtime $active)."; else info "control is ON but no runtime is active; dispatching a fresh session."; gh workflow run "$WORKFLOW" --repo "$REPO" --ref main; fi; fi; info "use 'xau status' to watch startup and 'xau dashboard' for the host link."; }
+cmd_stop(){ ensure_gh_auth; mapfile -t old_active < <(active_run_ids || true); mapfile -t old_queued < <(queued_run_ids || true); sync_main; local enabled; enabled="$(python3 -c 'import json; print("true" if json.load(open("runtime-control.json")).get("enabled") is True else "false")')"; if [[ "$enabled" == "true" ]]; then set_control false "Stopped from terminal"; commit_control "Turn XAUUSD company off"; info "OFF state pushed to main."; else info "control is already OFF."; fi; local id; for id in "${old_active[@]:-}" "${old_queued[@]:-}"; do [[ -n "$id" ]] || continue; info "cancelling old runtime $id"; gh run cancel "$id" --repo "$REPO" >/dev/null 2>&1 || true; done; info "company OFF requested; hosted dashboard tunnel will close with the runtime."; }
 cmd_status(){ ensure_gh_auth; git fetch -q origin main; git show origin/main:runtime-control.json | python3 -c 'import json,sys; d=json.load(sys.stdin); print("Control:","ON" if d.get("enabled") is True else "OFF"); print("Generation:",d.get("generation",0)); print("Reason:",d.get("reason",""))'; echo; gh run list --repo "$REPO" --workflow "$WORKFLOW" --limit 5; }
 cmd_dashboard(){ ensure_gh_auth; git fetch -q origin main; [[ "$(control_enabled_remote)" == true ]] || die "company control is OFF. Run 'xau start' first."; local active; active="$(active_run_ids | head -n1 || true)"; [[ -n "$active" ]] || die "runtime/dashboard is not active yet. Run 'xau status'."; local payload url active_flag; payload="$(git show origin/main:dashboard-live.json 2>/dev/null || true)"; [[ -n "$payload" ]] || die "dashboard URL has not been published yet."; read -r active_flag url < <(printf '%s' "$payload" | python3 -c 'import json,sys; d=json.load(sys.stdin); print("true" if d.get("active") is True else "false", d.get("url",""))'); [[ "$active_flag" == true && -n "$url" ]] || die "no active hosted dashboard URL is published yet."; echo "$url"; if [[ "${1:-}" == "--open" ]] && command -v xdg-open >/dev/null 2>&1; then xdg-open "$url" >/dev/null 2>&1 & fi; }
 cmd_logs(){ ensure_gh_auth; local run_id; run_id="$(latest_run_id)"; [[ -n "$run_id" ]] || die "no runtime workflow has run yet."; gh run view "$run_id" --repo "$REPO"; local status; status="$(gh run view "$run_id" --repo "$REPO" --json status --jq '.status')"; if [[ "$status" == completed ]]; then gh run view "$run_id" --repo "$REPO" --log; else info "runtime is active; full log download is available after completion."; fi; }
