@@ -1,5 +1,5 @@
 {
-  "enabled": false,
-  "generation": 7,
-  "reason": "EMERGENCY FORCE KILL requested by user"
+  "enabled": true,
+  "generation": 8,
+  "reason": "Started from terminal"
 }
