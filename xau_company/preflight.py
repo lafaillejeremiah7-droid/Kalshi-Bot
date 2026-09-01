@@ -17,7 +17,7 @@ def _required(name: str) -> str:
 
 def check_dukascopy() -> tuple[float, str]:
     symbol = os.getenv("SYMBOL", "XAU/USD")
-    client = DukascopyClient(timeout=20, retries=2, max_workers=4)
+    client = DukascopyClient(timeout=20, retries=2, max_workers=2)
     candles = client.candles(symbol, "1min", 10)
     if candles.empty:
         raise RuntimeError("Dukascopy returned no XAU/USD minute candles")
@@ -47,13 +47,16 @@ def check_telegram(session: Any = requests) -> None:
 
 
 def run() -> int:
+    # Validate signal-delivery credentials first so a missing/invalid Telegram
+    # configuration fails immediately instead of waiting on a market-data fetch.
+    check_telegram()
+    print("Telegram preflight: OK (bot token and chat reachable; no message sent)")
+
     price, stamp = check_dukascopy()
     print(
         f"Dukascopy preflight: OK ({os.getenv('SYMBOL', 'XAU/USD')} "
         f"price={price:.2f}, latest_1m={stamp})"
     )
-    check_telegram()
-    print("Telegram preflight: OK (bot token and chat reachable; no message sent)")
     return 0
 
 
