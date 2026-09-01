@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from xau_company.dashboard import default_state
+from xau_company.dashboard import DashboardPublisher
 
 
 ROOT = Path(__file__).resolve().parent
@@ -25,13 +25,9 @@ def _float(value: Any) -> float | None:
 
 
 def _read_state(path: Path) -> dict[str, Any]:
-    try:
-        state = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(state, dict):
-            return state
-    except (OSError, ValueError, TypeError):
-        pass
-    return default_state()
+    # DashboardPublisher owns compatibility/roster normalization for persisted
+    # state. Reading through it keeps the server and runtime on the same schema.
+    return DashboardPublisher(path).snapshot()
 
 
 def _read_performance(db_path: Path) -> dict[str, Any] | None:
