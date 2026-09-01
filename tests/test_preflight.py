@@ -1,3 +1,4 @@
+import pandas as pd
 import pytest
 
 from xau_company import preflight
@@ -24,12 +25,47 @@ class _Session:
         return self.responses.pop(0)
 
 
-def test_twelve_data_preflight_accepts_positive_price(monkeypatch):
-    monkeypatch.setenv("TWELVE_DATA_API_KEY", "test-key")
-    session = _Session([_Response({"price": "2500.25"})])
-    assert preflight.check_twelve_data(session) == 2500.25
-    _, kwargs = session.calls[0]
-    assert kwargs["params"]["symbol"] == "XAU/USD"
+class _DukascopyOK:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+
+    def candles(self, symbol, interval, output_size):
+        assert symbol == "XAU/USD"
+        assert interval == "1min"
+        assert output_size == 10
+        return pd.DataFrame(
+            {
+                "datetime": [pd.Timestamp("2026-08-31T23:59:00Z")],
+                "open": [2500.0],
+                "high": [2501.0],
+                "low": [2499.0],
+                "close": [2500.5],
+                "volume": [1.0],
+            }
+        )
+
+    def price(self, symbol):
+        assert symbol == "XAU/USD"
+        return 2500.25
+
+
+class _DukascopyEmpty(_DukascopyOK):
+    def candles(self, symbol, interval, output_size):
+        return pd.DataFrame()
+
+
+def test_dukascopy_preflight_accepts_live_data_without_api_key(monkeypatch):
+    monkeypatch.delenv("TWELVE_DATA_API_KEY", raising=False)
+    monkeypatch.setattr(preflight, "DukascopyClient", _DukascopyOK)
+    price, stamp = preflight.check_dukascopy()
+    assert price == 2500.25
+    assert "2026-08-31 23:59:00+00:00" in stamp
+
+
+def test_dukascopy_preflight_rejects_missing_market_data(monkeypatch):
+    monkeypatch.setattr(preflight, "DukascopyClient", _DukascopyEmpty)
+    with pytest.raises(RuntimeError, match="no XAU/USD minute candles"):
+        preflight.check_dukascopy()
 
 
 def test_telegram_preflight_checks_bot_and_chat_without_sending(monkeypatch):
@@ -42,7 +78,8 @@ def test_telegram_preflight_checks_bot_and_chat_without_sending(monkeypatch):
     assert all("sendMessage" not in url for url, _ in session.calls)
 
 
-def test_preflight_fails_when_required_secret_missing(monkeypatch):
-    monkeypatch.delenv("TWELVE_DATA_API_KEY", raising=False)
-    with pytest.raises(RuntimeError):
-        preflight.check_twelve_data(_Session([]))
+def test_telegram_preflight_fails_when_required_secret_missing(monkeypatch):
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "123")
+    with pytest.raises(RuntimeError, match="TELEGRAM_BOT_TOKEN"):
+        preflight.check_telegram(_Session([]))
