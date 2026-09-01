@@ -325,6 +325,8 @@ def _feature_events_for_market(
     close_ts_ns: int,
 ) -> Iterable[ResearchEvent]:
     for event in events:
+        if isinstance(event, SettlementEvent):
+            continue
         if event.recv_ts_ns > close_ts_ns:
             continue
         if isinstance(event, MarketEvent) and event.market_ticker == market_ticker:
