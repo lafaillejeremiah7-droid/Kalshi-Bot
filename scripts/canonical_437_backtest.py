@@ -29,6 +29,8 @@ SELECTION_START = pd.Timestamp("2016-01-01", tz="UTC")
 HOLDOUT_START = pd.Timestamp("2022-01-01", tz="UTC")
 MIN_SELECTION_TRADES = 30
 MIN_HOLDOUT_TRADES = 15
+MAX_SELECTION_BH_Q = 0.10
+MAX_HOLDOUT_P_VALUE = 0.10
 
 BACKTESTER = TradeLifecycleBacktester(
     spread_bps=1.5,
@@ -330,6 +332,7 @@ def main() -> None:
             int(sel["trades"]) >= MIN_SELECTION_TRADES
             and float(sel["avg_r"]) > 0.0
             and float(sel["profit_factor"]) > 1.0
+            and float(r.get("selection_bh_q", 1.0)) <= MAX_SELECTION_BH_Q
         )
 
     ranked = sorted(
@@ -346,11 +349,19 @@ def main() -> None:
     survivors: list[dict[str, object]] = []
     for r in frozen_top:
         hold = r["holdout"]
+        holdout_p_value = _normal_positive_edge_pvalue(_subset(
+            BACKTESTER.simulate(xau, engine.signal(next(s for s in STRATEGIES if s.strategy_id == r["strategy_id"])), atr_values, next(s for s in STRATEGIES if s.strategy_id == r["strategy_id"]).horizon),
+            xau.datetime,
+            HOLDOUT_START,
+            None,
+        ))
+        r["holdout_p_value"] = holdout_p_value
         holdout_gate = bool(
             int(hold["trades"]) >= MIN_HOLDOUT_TRADES
             and float(hold["avg_r"]) > 0.0
             and float(hold["profit_factor"]) > 1.0
             and float(hold["max_drawdown_r"]) <= 25.0
+            and holdout_p_value <= MAX_HOLDOUT_P_VALUE
         )
         r["holdout_gate"] = holdout_gate
         if holdout_gate:
@@ -395,7 +406,8 @@ def main() -> None:
             "untouched_holdout_period": f"{HOLDOUT_START.isoformat()} onward",
             "selection_policy": "rank on selection only; freeze top 109; holdout may reject but never replace",
             "anti_lookahead": "for every executable strategy, compare full-history pre-cut signals with prefix-only signals",
-            "multiple_testing": "one-sided positive-edge p-values with Benjamini-Hochberg q-values reported",
+            "multiple_testing": "one-sided positive-edge p-values with Benjamini-Hochberg q<=0.10 required before ranking",
+            "holdout_confirmation": "frozen selection winners must independently pass positive-edge p<=0.10 on untouched holdout; holdout cannot promote replacements",
         },
         "data": {
             "xau_m15": _coverage(xau),
