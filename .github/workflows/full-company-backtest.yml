@@ -31,7 +31,9 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: |
+          pip install -r requirements.txt
+          pip install "pandas>=2.2,<3"
 
       - name: Compile historical runner
         run: python -m py_compile scripts/full_company_historical_backtest.py
