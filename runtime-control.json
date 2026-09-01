@@ -1,5 +1,5 @@
 {
-  "enabled": false,
-  "generation": 2,
-  "reason": "Restarting once to attach public dashboard tunnel"
+  "enabled": true,
+  "generation": 3,
+  "reason": "User requested ON with public dashboard"
 }
