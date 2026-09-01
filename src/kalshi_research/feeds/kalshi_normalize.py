@@ -19,15 +19,17 @@ from kalshi_research.feeds.kalshi_ws import SequenceGap
 
 
 class KalshiSchemaError(ValueError):
-    """A known Kalshi message type did not match the expected research schema."""
+    """Known Kalshi message type did not match the expected research schema."""
 
 
 class UnknownKalshiMessage(KalshiSchemaError):
-    """A message type is not explicitly supported by this research collector."""
+    """Message type is outside the explicitly supported research schema."""
 
 
 class _StrictModel(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
+    # Primitive fields remain strict through Strict* types, while JSON arrays may
+    # still validate into tuple-shaped price levels.
+    model_config = ConfigDict(extra="forbid")
 
 
 class _OrderbookSnapshotMsg(_StrictModel):
@@ -128,7 +130,7 @@ def _decimal(value: str, field: str, *, positive: bool = False) -> Decimal:
 
 def _price(value: str, field: str) -> Decimal:
     parsed = _decimal(value, field)
-    if parsed < 0 or parsed > 1:
+    if not Decimal("0") <= parsed <= Decimal("1"):
         raise KalshiSchemaError(f"{field} must be within [0, 1]")
     return parsed
 
@@ -163,22 +165,19 @@ def _source_value(frame: str) -> tuple[int, Decimal]:
     ts = data.get("time")
     value = data.get("value")
     if isinstance(ts, bool) or not isinstance(ts, int):
-        raise KalshiSchemaError("CF Benchmarks upstream time must be an integer ms timestamp")
+        raise KalshiSchemaError("CF Benchmarks upstream time must be integer milliseconds")
     if not isinstance(value, str):
         raise KalshiSchemaError("CF Benchmarks upstream value must be a decimal string")
     return ts, _decimal(value, "CF Benchmarks value", positive=True)
 
 
 def normalize_kalshi_message(
-    raw: str | bytes | dict[str, Any],
-    *,
-    recv_ts_ns: int,
+    raw: str | bytes | dict[str, Any], *, recv_ts_ns: int
 ) -> ResearchEvent | None:
-    """Convert one verified Kalshi WS frame to a canonical research event.
+    """Normalize one Kalshi frame; control messages return None.
 
-    Control-plane messages intentionally return ``None``. Known data messages
-    are strictly validated. Unknown or malformed frames raise instead of being
-    guessed so the capture runner can quarantine them.
+    Known data messages are validated against explicit schemas. Unknown or
+    malformed frames raise so the capture runner can quarantine them.
     """
     payload = _decode(raw)
     msg_type = payload.get("type")
@@ -204,9 +203,7 @@ def normalize_kalshi_message(
 
         if msg_type == "orderbook_delta":
             parsed = _OrderbookDelta.model_validate(payload)
-            event_ts_ns = (
-                parsed.msg.ts_ms * 1_000_000 if parsed.msg.ts_ms is not None else recv_ts_ns
-            )
+            event_ts_ns = parsed.msg.ts_ms * 1_000_000 if parsed.msg.ts_ms else recv_ts_ns
             return OrderbookDeltaEvent(
                 source=Source.KALSHI,
                 event_ts_ns=event_ts_ns,
@@ -240,7 +237,7 @@ def normalize_kalshi_message(
             parsed = _CFBenchmarksValue.model_validate(payload)
             if parsed.msg.index_id != "BRTI":
                 raise UnknownKalshiMessage(
-                    f"CF Benchmarks index {parsed.msg.index_id!r} is outside BTC15m research scope"
+                    f"CF Benchmarks index {parsed.msg.index_id!r} is outside BTC15m scope"
                 )
             upstream_ms, value = _source_value(parsed.msg.data)
             trailing = parsed.msg.avg_60s_data
@@ -262,15 +259,15 @@ def normalize_kalshi_message(
                 trailing_60s_sample_count=trailing.window_size,
                 final_minute_average=(
                     _decimal(final.value, "BRTI final-minute average", positive=True)
-                    if final is not None
+                    if final
                     else None
                 ),
-                final_minute_sample_count=final.window_size if final is not None else None,
+                final_minute_sample_count=final.window_size if final else None,
                 final_minute_window_start_ts_ns=(
-                    final.window_start_ts_ms * 1_000_000 if final is not None else None
+                    final.window_start_ts_ms * 1_000_000 if final else None
                 ),
                 final_minute_window_end_ts_ns=(
-                    final.window_end_ts_exclusive * 1_000_000 if final is not None else None
+                    final.window_end_ts_exclusive * 1_000_000 if final else None
                 ),
             )
     except ValidationError as exc:
@@ -280,7 +277,7 @@ def normalize_kalshi_message(
 
 
 class SubscriptionSequenceGuard:
-    """Fail-closed sequence validation keyed by Kalshi subscription id (sid)."""
+    """Fail-closed sequence validation keyed by Kalshi subscription id."""
 
     def __init__(self) -> None:
         self._last_seq: dict[int, int] = {}
@@ -293,7 +290,6 @@ class SubscriptionSequenceGuard:
             self._last_seq[event.sid] = event.seq
             self._book_ready.add(event.sid)
             return
-
         if isinstance(event, OrderbookDeltaEvent):
             if event.sid is None:
                 raise SequenceGap("orderbook delta is missing subscription id")
@@ -301,7 +297,6 @@ class SubscriptionSequenceGuard:
                 raise SequenceGap(f"delta for sid {event.sid} received before snapshot")
             self._expect_next(event.sid, event.seq)
             return
-
         if isinstance(event, IndexTickEvent) and event.sid is not None and event.seq is not None:
             if event.sid not in self._last_seq:
                 self._last_seq[event.sid] = event.seq
