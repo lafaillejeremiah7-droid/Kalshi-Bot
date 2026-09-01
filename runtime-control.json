@@ -1,5 +1,5 @@
 {
-  "enabled": true,
-  "generation": 6,
-  "reason": "Dashboard-first runtime with fail-safe market-data degradation"
+  "enabled": false,
+  "generation": 7,
+  "reason": "EMERGENCY FORCE KILL requested by user"
 }
