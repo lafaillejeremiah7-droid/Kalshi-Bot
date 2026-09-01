@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-09-01T09:15:00.154753Z",
-  "git_sha": "6956a44f6530f34a00f121dca3fcd704d9707e0c",
+  "generated_at": "2026-09-01T09:20:48.503534Z",
+  "git_sha": "7f8c29c18b17d205676f677a2bb7b1bde97ff79b",
   "status": "complete",
   "dataset": {
     "source_repo": "simom1/XAUUSD-history",
@@ -126,7 +126,13 @@
     ]
   },
   "forward_replay": {
-    "counters": {},
+    "counters": {
+      "decision_bars": 89232,
+      "no_strategy_direction": 79991,
+      "session_veto": 97516,
+      "selector_veto": 9241,
+      "volatility_veto": 916
+    },
     "resolved_trades": 0,
     "wins": 0,
     "losses": 0,
