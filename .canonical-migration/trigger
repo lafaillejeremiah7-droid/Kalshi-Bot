@@ -1,1 +1,1 @@
-apply canonical 437 migration
+apply canonical 437 migration retry 2
