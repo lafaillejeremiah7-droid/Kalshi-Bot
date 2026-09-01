@@ -127,6 +127,21 @@ jobs:
               "Fill in `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`. Dukascopy market data is keyless. Keep `PAPER_MODE=true` until enough forward evidence exists.",
           )
 
+          touched = (
+              "main.py",
+              "README.md",
+              "xau_company/config.py",
+              "xau_company/data.py",
+              "xau_company/quality.py",
+              "tests/test_dukascopy_data.py",
+              "tests/test_delivery_guards.py",
+              "tests/test_preflight.py",
+              "tests/test_synchronization.py",
+          )
+          for name in touched:
+              p = Path(name)
+              p.write_text(p.read_text().rstrip() + "\n")
+
           # Hard verification: no retired-provider names remain in tracked text files.
           forbidden = ("Twelve" + "Data", "Twelve Data", "TWELVE" + "_DATA", "twelve" + "_data")
           excluded = {Path(".github/workflows/twelve-data-cleanup.yml")}
