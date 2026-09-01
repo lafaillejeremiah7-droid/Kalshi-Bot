@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
+import pandas as pd
 import requests
 
 from xau_company.data import DukascopyClient
@@ -17,20 +19,44 @@ def _required(name: str) -> str:
 
 def check_dukascopy() -> tuple[float, str]:
     symbol = os.getenv("SYMBOL", "XAU/USD")
-    client = DukascopyClient(timeout=8, retries=2, max_workers=1, recent_tick_hours=3)
+    client = DukascopyClient(timeout=6, retries=1, max_workers=1, recent_tick_hours=3)
 
-    # Production Dukascopy clients validate the live hourly tick path directly.
-    # The public candles() fallback keeps compatibility with lightweight test
-    # doubles and older client implementations.
-    if hasattr(client, "_fetch_recent_tick_m1") and hasattr(client, "_instrument"):
+    # A readiness check only needs one recent completed tick hour. Stop as soon
+    # as one valid file is found instead of downloading the full intraday window.
+    live_api = all(
+        hasattr(client, name)
+        for name in ("_instrument", "_tick_url", "_request_bytes", "decode_tick_candles", "BASE_URLS")
+    )
+    if live_api:
         instrument, divisor = client._instrument(symbol)
-        candles = client._fetch_recent_tick_m1(instrument, divisor)
+        now = datetime.now(timezone.utc)
+        current_minute = now.replace(second=0, microsecond=0)
+        current_hour = current_minute.replace(minute=0)
+        candles = client._empty()
+        for offset in range(3):
+            hour = current_hour - timedelta(hours=offset)
+            urls = [client._tick_url(base, instrument, hour) for base in client.BASE_URLS]
+            try:
+                payload = client._request_bytes(urls, attempts=1)
+                candidate = client.decode_tick_candles(payload, hour, divisor)
+            except RuntimeError:
+                continue
+            if candidate.empty:
+                continue
+            candidate = candidate[pd.to_datetime(candidate["datetime"], utc=True) < current_minute]
+            if not candidate.empty:
+                candles = candidate
+                break
+        if candles.empty:
+            raise RuntimeError("Dukascopy returned no XAU/USD minute candles")
+        price = float(candles["close"].iloc[-1])
     else:
+        # Compatibility path used by lightweight tests/older clients.
         candles = client.candles(symbol, "1min", 10)
-    if candles.empty:
-        raise RuntimeError("Dukascopy returned no XAU/USD minute candles")
+        if candles.empty:
+            raise RuntimeError("Dukascopy returned no XAU/USD minute candles")
+        price = client.price(symbol)
 
-    price = client.price(symbol)
     if price <= 0:
         raise RuntimeError("Dukascopy returned a non-positive XAU/USD price")
     stamp = str(candles["datetime"].iloc[-1])
