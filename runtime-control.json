@@ -1,5 +1,5 @@
 {
   "enabled": true,
-  "generation": 3,
-  "reason": "User requested ON with public dashboard"
+  "generation": 4,
+  "reason": "Relaunch after dashboard DNS readiness fix"
 }
