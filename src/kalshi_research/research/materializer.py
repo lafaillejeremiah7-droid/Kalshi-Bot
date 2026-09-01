@@ -72,12 +72,17 @@ class FeatureMaterializer:
         normalized_distance = None
         if brti is not None and target is not None and brti > 0 and target > 0:
             log_distance = math.log(brti / target)
-            if sigma is not None and sigma > 0 and seconds_to_close is not None:
+            if (
+                sigma is not None
+                and sigma > 0
+                and seconds_to_close is not None
+                and seconds_to_close > 0
+            ):
                 normalized_distance = normalized_log_distance(
                     brti,
                     target,
                     sigma,
-                    max(seconds_to_close, 0.0),
+                    seconds_to_close,
                 )
 
         yes_bid = _fresh_float(frame.yes_bid, frame.kalshi_book_state.fresh)
@@ -119,15 +124,9 @@ class FeatureMaterializer:
         required_remaining_average = None
         if sample_count is not None:
             final_progress = sample_count / 60
-            if (
-                target is not None
-                and final_average is not None
-                and 0 <= sample_count < 60
-            ):
+            if target is not None and final_average is not None and 0 <= sample_count < 60:
                 known_sum = final_average * sample_count
-                required_remaining_average = (
-                    60 * target - known_sum
-                ) / (60 - sample_count)
+                required_remaining_average = (60 * target - known_sum) / (60 - sample_count)
 
         baseline_ready = (
             frame.probability_ready
