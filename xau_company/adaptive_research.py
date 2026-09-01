@@ -9,23 +9,7 @@ from .research import CandidateScore, StrategyResearchAgent
 
 
 class AdaptiveStrategyResearchAgent(StrategyResearchAgent):
-    """Audited research lab for the survivor-only canonical strategy library.
-
-    Strategy Evolution and Strategy Invention remain permanently removed.
-    Legacy constructor arguments are accepted only as inert compatibility shims.
-    """
-
-    _REMOVED_DYNAMIC_ARGS = {
-        "enable_evolution",
-        "strategy_library_path",
-        "discoveries_per_cycle",
-        "discovery_library_size",
-        "enable_invention",
-        "invention_library_path",
-        "invented_families_per_cycle",
-        "invented_variants_per_family",
-        "invention_library_size",
-    }
+    """Audited research lab for the survivor-only canonical strategy library."""
 
     def __init__(
         self,
@@ -40,8 +24,6 @@ class AdaptiveStrategyResearchAgent(StrategyResearchAgent):
         overfit_max_loss_streak: int = 7,
         **kwargs,
     ) -> None:
-        for key in self._REMOVED_DYNAMIC_ARGS:
-            kwargs.pop(key, None)
         super().__init__(*args, **kwargs)
         self.overfit_auditor = OverfitAuditor(
             min_adjusted_score=overfit_min_adjusted_score,
@@ -57,22 +39,6 @@ class AdaptiveStrategyResearchAgent(StrategyResearchAgent):
         self.last_seed_audited = 0
         self.last_seed_overfit_rejected = 0
         self.last_seed_live_eligible = 0
-        self.last_lifetime_trials = 0
-
-        # Removed-employee compatibility telemetry is permanently zero.
-        self.dynamic_library_size = 0
-        self.invention_library_size = 0
-        self.invention_family_count = 0
-        self.invention_promoted_family_count = 0
-        self.last_discovered = 0
-        self.last_promoted = 0
-        self.last_quarantined = 0
-        self.last_experimental_catalog_size = 0
-        self.last_invented_catalog_size = 0
-        self.last_invented_families = 0
-        self.last_invented_variants = 0
-        self.last_invention_promoted = 0
-        self.last_invention_quarantined = 0
 
     def _refresh_live_catalog(
         self,
@@ -83,12 +49,9 @@ class AdaptiveStrategyResearchAgent(StrategyResearchAgent):
         seed_audited = 0
         seed_rejected = 0
         seed_eligible = 0
-        tested_trials = max(
-            1,
-            int(seed_tested_trials)
-            if seed_tested_trials is not None
-            else max(self.last_evaluated, len(research_catalog)),
-        )
+        # The discovery universe is fixed at 437 distinct methodologies. Re-running
+        # the same survivors later does not create additional multiple-testing trials.
+        tested_trials = 437 if seed_tested_trials is None else max(1, int(seed_tested_trials))
 
         for result in research_catalog:
             if result.candidate.family not in self.HORIZONS:
@@ -127,7 +90,6 @@ class AdaptiveStrategyResearchAgent(StrategyResearchAgent):
     def run(self, df: pd.DataFrame) -> list[CandidateScore]:
         selected = self._balanced_candidates()
         self.last_evaluated = len(selected)
-        self.last_lifetime_trials += self.last_evaluated
         regimes = self._historical_regimes(df)
 
         research_catalog: list[CandidateScore] = []
@@ -137,8 +99,5 @@ class AdaptiveStrategyResearchAgent(StrategyResearchAgent):
                 research_catalog.append(result)
         research_catalog.sort(key=lambda x: x.score, reverse=True)
 
-        self._refresh_live_catalog(
-            research_catalog,
-            seed_tested_trials=max(1, self.last_evaluated),
-        )
+        self._refresh_live_catalog(research_catalog, seed_tested_trials=437)
         return self.top
