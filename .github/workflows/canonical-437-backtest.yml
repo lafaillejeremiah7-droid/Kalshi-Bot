@@ -16,7 +16,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: canonical-437-xauusd-backtest
+  group: canonical-437-xauusd-backtest-final-v3
   cancel-in-progress: true
 
 jobs:
