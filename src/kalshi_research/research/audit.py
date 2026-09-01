@@ -6,14 +6,12 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from kalshi_research.domain.events import (
-    EventKind,
     IndexTickEvent,
     MarketEvent,
     OrderbookDeltaEvent,
     OrderbookSnapshotEvent,
     ResearchEvent,
     SettlementEvent,
-    Source,
 )
 
 
