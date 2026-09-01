@@ -19,6 +19,8 @@ jobs:
   backtest:
     runs-on: ubuntu-latest
     timeout-minutes: 330
+    env:
+      PYTHONPATH: ${{ github.workspace }}
     steps:
       - uses: actions/checkout@v4
         with:
