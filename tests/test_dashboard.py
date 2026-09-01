@@ -13,12 +13,13 @@ def _employee(state, employee_id):
     return next(row for row in state["employees"] if row["id"] == employee_id)
 
 
-def test_default_dashboard_has_28_unique_employees():
+def test_default_dashboard_has_26_unique_employees():
     state = default_state()
     ids = [row["id"] for row in state["employees"]]
-    assert len(ids) == 28
-    assert len(set(ids)) == 28
-    assert "strategy_invention" in ids
+    assert len(ids) == 26
+    assert len(set(ids)) == 26
+    assert "strategy_evolution" not in ids
+    assert "strategy_invention" not in ids
     assert {room["id"] for room in state["rooms"]} == {
         "market", "research", "analysis", "risk", "decision", "performance"
     }
@@ -58,26 +59,6 @@ def test_log_handler_turns_real_signal_log_into_visible_office_flow(tmp_path):
     assert state["boss"]["confidence"] == 0.74
     assert _employee(state, "selector")["state"] in {"handoff", "done"}
     assert any(row["to"] == "boss" and row["document"] == "Strategy Recommendation" for row in state["handoffs"])
-
-
-def test_strategy_invention_research_log_becomes_visible_handoff(tmp_path):
-    publisher = DashboardPublisher(tmp_path / "state.json")
-    handler = DashboardLogHandler(publisher)
-    message = (
-        "Strategy lab universe=28000 evaluated=20000 lifetime_trials=20000 live_catalog=600 "
-        "experimental_catalog=0 invented_catalog=0 top=25 dynamic_library=20 invention_library=48 "
-        "discovered=20 promoted=0 quarantined=0 invented_new_families=6 invented_new_variants=48 "
-        "invention_promoted=0 invention_quarantined=0 invented_family_total=6 invented_family_promoted=0 "
-        "walk_forward_folds=4 spread_bps=1.50 slippage_bps=0.50"
-    )
-    handler.emit(logging.LogRecord("xau-company", logging.INFO, __file__, 1, message, (), None))
-    state = publisher.snapshot()
-    invention = _employee(state, "strategy_invention")
-    assert invention["state"] in {"handoff", "done"}
-    assert "6 families" in invention["task"] or any(
-        row["from"] == "strategy_invention" and row["document"] == "Invented Family Pack"
-        for row in state["handoffs"]
-    )
 
 
 def test_session_veto_is_visible_as_blocked_guard(tmp_path):
