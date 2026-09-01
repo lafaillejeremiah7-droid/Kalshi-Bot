@@ -153,6 +153,7 @@ def run_research_events(
             _feature_events_for_market(
                 materialized_events,
                 market_ticker=ticker,
+                open_ts_ns=contract.market.open_ts_ns,
                 close_ts_ns=contract.market.close_ts_ns,
             )
         )
@@ -320,10 +321,16 @@ def _feature_events_for_market(
     events: Sequence[ResearchEvent],
     *,
     market_ticker: str,
+    open_ts_ns: int,
     close_ts_ns: int,
 ) -> Iterable[ResearchEvent]:
     for event in events:
         if event.recv_ts_ns > close_ts_ns:
+            continue
+        if isinstance(event, MarketEvent) and event.market_ticker == market_ticker:
+            yield event
+            continue
+        if event.recv_ts_ns < open_ts_ns:
             continue
         if event.market_ticker is None or event.market_ticker == market_ticker:
             yield event
