@@ -1,0 +1,67 @@
+name: Full Historical XAUUSD Company Backtest
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/full_company_historical_backtest.py"
+      - ".github/workflows/full-company-backtest.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: full-xauusd-company-backtest
+  cancel-in-progress: true
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Compile historical runner
+        run: python -m py_compile scripts/full_company_historical_backtest.py
+
+      - name: Run full-company backtest
+        env:
+          BACKTEST_REPORT: full-company-backtest-report.json
+          BACKTEST_CACHE: /tmp/xau-full-company-backtest
+        run: |
+          set -o pipefail
+          python scripts/full_company_historical_backtest.py 2>&1 | tee full-company-backtest.log
+
+      - name: Upload backtest diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-company-backtest-${{ github.run_id }}
+          path: |
+            full-company-backtest-report.json
+            full-company-backtest.log
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Publish report to repository
+        if: success()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add full-company-backtest-report.json
+          if git diff --cached --quiet; then
+            echo "Backtest report unchanged"
+            exit 0
+          fi
+          git commit -m "Publish full historical XAUUSD company backtest [skip ci]"
+          git push origin HEAD:main
