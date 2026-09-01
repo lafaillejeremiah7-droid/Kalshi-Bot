@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/finalize-canonical-model.yml"
+      - ".canonical-finalizer-trigger"
   workflow_dispatch:
 
 permissions:
