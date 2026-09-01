@@ -126,9 +126,21 @@ class SpotTickEvent(BaseEvent):
     source: Source
     venue: str
     symbol: str = "BTC-USD"
-    bid: Decimal | None = None
-    ask: Decimal | None = None
-    last: Decimal | None = None
+    bid: Decimal | None = Field(default=None, gt=Decimal("0"))
+    ask: Decimal | None = Field(default=None, gt=Decimal("0"))
+    bid_size: Decimal | None = Field(default=None, gt=Decimal("0"))
+    ask_size: Decimal | None = Field(default=None, gt=Decimal("0"))
+    last: Decimal | None = Field(default=None, gt=Decimal("0"))
+    source_sequence: int | None = Field(default=None, ge=0)
+    checksum: int | None = None
+
+    @field_validator("ask")
+    @classmethod
+    def top_of_book_not_crossed(cls, value: Decimal | None, info):
+        bid = info.data.get("bid")
+        if value is not None and bid is not None and bid >= value:
+            raise ValueError("spot top of book must satisfy bid < ask")
+        return value
 
 
 class SettlementEvent(BaseEvent):
