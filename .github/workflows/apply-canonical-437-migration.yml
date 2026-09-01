@@ -1,0 +1,32 @@
+name: Apply Canonical 437 Migration
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".canonical-migration/**"
+      - "scripts/apply_canonical_437_migration.py"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Apply migration payload
+        run: python scripts/apply_canonical_437_migration.py
+      - name: Commit canonical architecture
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Replace parameter-grid strategies with canonical 437"
+          git push origin HEAD:main
