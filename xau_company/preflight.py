@@ -17,10 +17,16 @@ def _required(name: str) -> str:
 
 def check_dukascopy() -> tuple[float, str]:
     symbol = os.getenv("SYMBOL", "XAU/USD")
-    client = DukascopyClient(timeout=20, retries=4, max_workers=1)
-    candles = client.candles(symbol, "1min", 10)
+    client = DukascopyClient(timeout=20, retries=3, max_workers=1)
+
+    # Preflight is a live-readiness check, not a historical backfill. Validate
+    # the same hourly tick source used by the runtime's intraday fallback so an
+    # absent current-day candle archive cannot make startup appear unhealthy.
+    instrument, divisor = client._instrument(symbol)
+    candles = client._fetch_recent_tick_m1(instrument, divisor)
     if candles.empty:
-        raise RuntimeError("Dukascopy returned no XAU/USD minute candles")
+        raise RuntimeError("Dukascopy returned no recent XAU/USD tick-derived minute candles")
+
     price = client.price(symbol)
     if price <= 0:
         raise RuntimeError("Dukascopy returned a non-positive XAU/USD price")
@@ -47,8 +53,6 @@ def check_telegram(session: Any = requests) -> None:
 
 
 def run() -> int:
-    # Validate signal-delivery credentials first so a missing/invalid Telegram
-    # configuration fails immediately instead of waiting on a market-data fetch.
     check_telegram()
     print("Telegram preflight: OK (bot token and chat reachable; no message sent)")
 
