@@ -7,7 +7,6 @@ import pandas as pd
 from xau_company.models import Direction, TradeSignal
 from xau_company.outcomes import OutcomeCalibrationAgent
 from xau_company.runtime_quality import fetch_resolution_history, revalidate_optional_macro
-from xau_company.strategy_invention import StrategyInventionAgent
 from xau_company.telegram import TelegramNotifier
 
 
@@ -87,7 +86,7 @@ def test_forward_timeout_uses_setup_end_and_timeout_close_like_backtester(tmp_pa
 
 
 def test_forward_timeout_negative_close_is_loss(tmp_path):
-    tracker = OutcomeCalibrationAgent(str(tmp_path / "timeout_loss.sqlite3"))
+    tracker = OutcomeCalibrationAgent(str(tmp_path / "timeout_loss.sqlite3"), max_age_hours=1)
     setup = pd.Timestamp("2026-08-31T15:00:00Z")
     observed = pd.Timestamp("2026-08-31T15:16:00Z")
     assert tracker.record(_signal(Direction.BUY), observed, setup_at=setup)
@@ -105,7 +104,7 @@ def test_forward_timeout_negative_close_is_loss(tmp_path):
 
 def test_telegram_signal_is_capped_without_losing_core_trade_fields():
     signal = _signal(Direction.BUY)
-    signal.selected_strategy = "invented-" + ("X" * 2000)
+    signal.selected_strategy = "strategy-" + ("X" * 2000)
     signal.reasons = [("reason " + str(i) + " ") + ("Y" * 900) for i in range(20)]
     text = TelegramNotifier("token", "chat").format_signal(signal)
     assert len(text) <= TelegramNotifier.MAX_MESSAGE_CHARS
@@ -113,17 +112,3 @@ def test_telegram_signal_is_capped_without_losing_core_trade_fields():
     assert "Entry: 100.00" in text
     assert "TP: 104.00" in text
     assert "SL: 98.00" in text
-
-
-def test_invention_recovers_cursor_from_persisted_library_after_meta_rollback(tmp_path):
-    path = tmp_path / "invented.json"
-    bot = StrategyInventionAgent(str(path), families_per_cycle=1, variants_per_family=2, max_library_size=100)
-    assert bot.invent() == (1, 2)
-    meta_path = path.with_name(path.name + ".meta.json")
-    meta_path.write_text('{"next_family_index": 0}', encoding="utf-8")
-
-    restarted = StrategyInventionAgent(str(path), families_per_cycle=1, variants_per_family=2, max_library_size=100)
-    assert restarted.invent() == (1, 2)
-    assert restarted.family_count() == 2
-    family_ids = {row["family_id"] for row in restarted.entries()}
-    assert family_ids == {"INV-0001", "INV-0002"}
