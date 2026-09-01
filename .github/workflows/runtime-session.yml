@@ -114,7 +114,20 @@ jobs:
             exit 1
           fi
 
-          curl -fsS "$DASHBOARD_URL/api/health" >/dev/null
+          DASHBOARD_READY="false"
+          for _ in $(seq 1 30); do
+            if curl -fsS --connect-timeout 3 --max-time 5 "$DASHBOARD_URL/api/health" >/dev/null; then
+              DASHBOARD_READY="true"
+              break
+            fi
+            sleep 1
+          done
+
+          if [ "$DASHBOARD_READY" != "true" ]; then
+            cat /tmp/cloudflared.log
+            exit 1
+          fi
+
           echo "url=$DASHBOARD_URL" >> "$GITHUB_OUTPUT"
           echo "### Live XAU/USD dashboard" >> "$GITHUB_STEP_SUMMARY"
           echo "$DASHBOARD_URL" >> "$GITHUB_STEP_SUMMARY"
