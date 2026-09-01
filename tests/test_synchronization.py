@@ -108,13 +108,13 @@ def test_selector_does_not_double_count_timeframe_or_macro_votes_as_analysts():
 def test_overfit_minimum_trade_gate_uses_oos_sample_not_total_backtest_trades():
     candidate = Candidate("S001")
     score = _score(candidate, trades=500, regime_trades={"trend_up": 12, "range": 8})
-    result = OverfitAuditor(min_trades=40).audit(score, tested_trials=20_000)
+    result = OverfitAuditor(min_trades=40).audit(score, tested_trials=437)
     assert result.passed is False
     assert any("OOS trade sample 20" in reason for reason in result.reasons)
 
 
 def test_boss_uses_exact_requested_consensus_not_off_by_one():
-    lab = StrategyResearchAgent(max_candidates=1000)
+    lab = StrategyResearchAgent(max_candidates=437)
     boss = BossAgent(lab, min_consensus=3)
     assert boss.selector.min_agreement == 3
 
@@ -122,14 +122,14 @@ def test_boss_uses_exact_requested_consensus_not_off_by_one():
 def test_session_desk_vetoes_outside_approved_liquidity_window():
     frame = _df(n=250, start="2026-08-30T00:00:00Z")
     frame.loc[frame.index[-1], "datetime"] = pd.Timestamp("2026-08-31T03:00:00Z")
-    vote = SessionAgent().vote(frame, "trend_up", StrategyResearchAgent(max_candidates=1000))
+    vote = SessionAgent().vote(frame, "trend_up", StrategyResearchAgent(max_candidates=437))
     assert vote.metadata["liquidity_ok"] is False
     assert vote.metadata["veto"] is True
 
 
 def test_boss_live_risk_geometry_matches_research_and_uses_live_price():
     lab = StrategyResearchAgent(
-        max_candidates=1000,
+        max_candidates=437,
         backtest_stop_atr=1.2,
         backtest_reward_risk=1.7,
     )
@@ -227,19 +227,15 @@ def test_partial_emission_candle_is_marked_ambiguous_not_win_or_loss(tmp_path):
 
 
 def test_invalid_zero_schedule_is_rejected():
-    cfg = Settings(
-        research_every_cycles=0,
-    )
+    cfg = Settings(research_every_cycles=0)
     with pytest.raises(ValueError, match="RESEARCH_EVERY_CYCLES"):
         cfg.validate()
 
 
-def test_two_fold_configuration_does_not_create_impossible_three_fold_promotion_gate(tmp_path):
+def test_two_fold_configuration_keeps_two_fold_overfit_gate():
     lab = AdaptiveStrategyResearchAgent(
-        max_candidates=1000,
+        max_candidates=437,
         walk_forward_folds=2,
         min_walk_forward_folds=2,
-        strategy_library_path=str(tmp_path / "strategies.json"),
-        discoveries_per_cycle=0,
     )
     assert lab.overfit_auditor.min_folds == 2
