@@ -748,7 +748,7 @@ class CanonicalSignalEngine:
             change=(c-c.shift(10)).abs(); vol=c.diff().abs().rolling(10).sum()
             er=change/vol.replace(0,np.nan); sc=(er*(2/(2+1)-2/(30+1))+2/(30+1))**2
             kama=c.copy()
-            vals=kama.to_numpy(dtype=float); scv=sc.fillna(0).to_numpy(dtype=float)
+            vals=kama.to_numpy(dtype=float).copy(); scv=sc.fillna(0).to_numpy(dtype=float)
             for i in range(1,len(vals)): vals[i]=vals[i-1]+scv[i]*(float(c.iloc[i])-vals[i-1])
             kama=pd.Series(vals,index=c.index)
             return _signed(c.index,(c>kama)&(c.shift(1)<=kama.shift(1)),(c<kama)&(c.shift(1)>=kama.shift(1)))
