@@ -2,12 +2,14 @@ from decimal import Decimal
 
 import pytest
 
+from kalshi_research.domain.events import Source
 from kalshi_research.feeds.external import (
     ExternalFeedError,
     KrakenBook,
     coinbase_subscription_messages,
     kraken_subscription_message,
     normalize_coinbase_ticker,
+    quote_to_spot_event,
     rfc3339_to_ns,
 )
 
@@ -28,7 +30,7 @@ def test_coinbase_public_subscription_messages_are_non_trading():
     assert "order" not in lowered
 
 
-def test_normalizes_coinbase_ticker():
+def test_normalizes_coinbase_ticker_and_converts_to_canonical_event():
     quotes = normalize_coinbase_ticker(
         {
             "channel": "ticker",
@@ -62,6 +64,13 @@ def test_normalizes_coinbase_ticker():
     assert quote.ask == Decimal("21933.98")
     assert quote.last == Decimal("21932.98")
     assert quote.source_sequence == 123
+
+    event = quote_to_spot_event(quote)
+    assert event.source == Source.COINBASE
+    assert event.symbol == "BTC-USD"
+    assert event.bid_size == Decimal("8.21")
+    assert event.ask_size == Decimal("3.07")
+    assert event.source_sequence == 123
 
 
 def test_coinbase_heartbeats_are_control_plane():
@@ -113,9 +122,8 @@ def test_kraken_subscription_is_public_book_only():
     }
 
 
-def test_kraken_snapshot_and_update_reconstruct_top_of_book():
-    book = KrakenBook()
-    snapshot = book.apply(
+def _seed_kraken_book(book: KrakenBook):
+    return book.apply(
         {
             "channel": "book",
             "type": "snapshot",
@@ -137,6 +145,11 @@ def test_kraken_snapshot_and_update_reconstruct_top_of_book():
         },
         recv_ts_ns=1_704_067_200_200_000_000,
     )
+
+
+def test_kraken_snapshot_and_update_reconstruct_top_of_book():
+    book = KrakenBook()
+    snapshot = _seed_kraken_book(book)
     assert snapshot[0].bid == Decimal("30000.0")
     assert snapshot[0].ask == Decimal("30001.0")
     assert snapshot[0].checksum == 123456
@@ -161,6 +174,11 @@ def test_kraken_snapshot_and_update_reconstruct_top_of_book():
     assert update[0].bid_size == Decimal("3.0")
     assert update[0].ask == Decimal("30001.0")
     assert update[0].ask_size == Decimal("2.5")
+
+    event = quote_to_spot_event(update[0])
+    assert event.source == Source.KRAKEN
+    assert event.symbol == "BTC-USD"
+    assert event.checksum == 789012
 
 
 def test_kraken_update_before_snapshot_fails_closed():
@@ -203,3 +221,34 @@ def test_kraken_negative_quantity_fails_closed():
             },
             recv_ts_ns=1_704_067_200_100_000_000,
         )
+
+
+def test_kraken_bad_update_does_not_partially_mutate_state():
+    book = KrakenBook()
+    _seed_kraken_book(book)
+    bids_before = dict(book.bids)
+    asks_before = dict(book.asks)
+
+    with pytest.raises(ExternalFeedError):
+        book.apply(
+            {
+                "channel": "book",
+                "type": "update",
+                "data": [
+                    {
+                        "symbol": "BTC/USD",
+                        "bids": [
+                            {"price": Decimal("30000.0"), "qty": Decimal("0")},
+                            {"price": Decimal("29998.0"), "qty": Decimal("-1")},
+                        ],
+                        "asks": [{"price": Decimal("30001.0"), "qty": Decimal("2.5")}],
+                        "checksum": 999,
+                        "timestamp": "2024-01-01T00:00:00.323456789Z",
+                    }
+                ],
+            },
+            recv_ts_ns=1_704_067_200_400_000_000,
+        )
+
+    assert book.bids == bids_before
+    assert book.asks == asks_before
