@@ -1,0 +1,56 @@
+/* Online presence is separate from the employee's current task state.
+   The green left indicator means the bot is connected to the live company;
+   the existing right indicator still shows working/handoff/veto/done/idle. */
+.worker.is-online::after {
+  content: "";
+  position: absolute;
+  top: 5px;
+  left: 5px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 8px rgba(78, 228, 123, .72);
+  animation: onlinePresenceDot 2.6s ease-in-out infinite;
+  z-index: 8;
+}
+
+.worker.is-online.is-idle .mini-person,
+.worker.is-online.is-done .mini-person {
+  animation: onlinePresence 3.4s ease-in-out infinite;
+}
+
+.worker.is-online.is-idle .monitor,
+.worker.is-online.is-done .monitor {
+  animation: onlineMonitor 3.1s ease-in-out infinite;
+}
+
+.legend-dot.idle {
+  color: var(--green);
+  background: currentColor;
+}
+
+@keyframes onlinePresenceDot {
+  0%, 100% { opacity: .52; transform: scale(.84); }
+  50% { opacity: 1; transform: scale(1.12); }
+}
+
+@keyframes onlinePresence {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(1px); }
+}
+
+@keyframes onlineMonitor {
+  0%, 100% { box-shadow: inset 0 0 8px rgba(36,184,255,.12), 0 0 5px rgba(36,184,255,.05); }
+  50% { box-shadow: inset 0 0 12px rgba(36,184,255,.26), 0 0 8px rgba(36,184,255,.11); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .worker.is-online::after,
+  .worker.is-online.is-idle .mini-person,
+  .worker.is-online.is-done .mini-person,
+  .worker.is-online.is-idle .monitor,
+  .worker.is-online.is-done .monitor {
+    animation: none;
+  }
+}
