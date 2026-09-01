@@ -1,5 +1,3 @@
-import math
-
 from kalshi_research.math.features import book_imbalance, microprice, normalized_log_distance
 
 
