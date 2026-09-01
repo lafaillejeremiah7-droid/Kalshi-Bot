@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "source": "pending canonical 437 historical audit",
+  "source": "canonical-437-backtest-report.json",
   "canonical_count": 437,
   "max_survivors": 109,
   "survivor_count": 0,
