@@ -44,10 +44,9 @@ _RESAMPLE_RULE = {
 class DukascopyClient:
     """Keyless Dukascopy public-datafeed client used by the XAU/USD company.
 
-    Dukascopy publishes LZMA-compressed minute candles and tick files under its
-    public datafeed host. The company downloads 1-minute BID candles, caches
-    immutable past days in memory, and resamples that single source into every
-    configured timeframe so desks cannot disagree because of mixed providers.
+    Completed daily minute files provide history. Recent hourly tick files are
+    converted into completed one-minute OHLC bars so the company does not depend
+    on Dukascopy publishing the current day's minute-candle file intraday.
 
     ``api_key`` remains an accepted constructor argument only for backwards
     compatibility with older ``TwelveDataClient`` call sites. It is ignored.
@@ -69,10 +68,11 @@ class DukascopyClient:
         self,
         api_key: str = "",
         timeout: int = 20,
-        retries: int = 4,
+        retries: int = 3,
         max_workers: int = 2,
         current_day_ttl_seconds: int = 30,
         max_history_days: int = 400,
+        recent_tick_hours: int = 8,
         session: Any | None = None,
     ) -> None:
         del api_key
@@ -81,6 +81,7 @@ class DukascopyClient:
         self.max_workers = max(1, min(4, int(max_workers)))
         self.current_day_ttl_seconds = max(5, int(current_day_ttl_seconds))
         self.max_history_days = max(10, int(max_history_days))
+        self.recent_tick_hours = max(2, min(24, int(recent_tick_hours)))
         self.session = session or requests.Session()
         self._day_cache: dict[tuple[str, date], tuple[float, pd.DataFrame]] = {}
         self._cache_lock = Lock()
@@ -161,13 +162,17 @@ class DukascopyClient:
         return pd.DataFrame(rows).sort_values("datetime").reset_index(drop=True)
 
     @staticmethod
-    def decode_tick_payload(payload: bytes, hour: datetime, divisor: float) -> tuple[datetime, float] | None:
+    def _decode_tick_raw(payload: bytes) -> bytes:
         if not payload:
-            return None
+            return b""
         try:
-            raw = lzma.decompress(payload)
+            return lzma.decompress(payload)
         except lzma.LZMAError as exc:
             raise RuntimeError("Dukascopy tick payload could not be decompressed") from exc
+
+    @classmethod
+    def decode_tick_payload(cls, payload: bytes, hour: datetime, divisor: float) -> tuple[datetime, float] | None:
+        raw = cls._decode_tick_raw(payload)
         if not raw:
             return None
         usable = len(raw) - (len(raw) % _TICK_STRUCT.size)
@@ -184,9 +189,51 @@ class DukascopyClient:
             latest = (stamp, (ask + bid) / 2.0)
         return latest
 
-    def _request_bytes(self, urls: list[str]) -> bytes:
+    @classmethod
+    def decode_tick_candles(cls, payload: bytes, hour: datetime, divisor: float) -> pd.DataFrame:
+        """Convert one Dukascopy hourly tick file to one-minute mid-price OHLC."""
+        raw = cls._decode_tick_raw(payload)
+        if not raw:
+            return cls._empty()
+        usable = len(raw) - (len(raw) % _TICK_STRUCT.size)
+        if usable <= 0:
+            return cls._empty()
+
+        base = hour.replace(minute=0, second=0, microsecond=0, tzinfo=timezone.utc)
+        buckets: dict[datetime, dict[str, float | datetime]] = {}
+        for offset_ms, ask_raw, bid_raw, ask_vol, bid_vol in _TICK_STRUCT.iter_unpack(raw[:usable]):
+            ask = float(ask_raw) / divisor
+            bid = float(bid_raw) / divisor
+            if ask <= 0 or bid <= 0 or ask < bid:
+                continue
+            stamp = base + timedelta(milliseconds=int(offset_ms))
+            minute = stamp.replace(second=0, microsecond=0)
+            price = (ask + bid) / 2.0
+            volume = max(0.0, float(ask_vol)) + max(0.0, float(bid_vol))
+            bar = buckets.get(minute)
+            if bar is None:
+                buckets[minute] = {
+                    "datetime": minute,
+                    "open": price,
+                    "high": price,
+                    "low": price,
+                    "close": price,
+                    "volume": volume,
+                }
+            else:
+                bar["high"] = max(float(bar["high"]), price)
+                bar["low"] = min(float(bar["low"]), price)
+                bar["close"] = price
+                bar["volume"] = float(bar["volume"]) + volume
+        if not buckets:
+            return cls._empty()
+        return pd.DataFrame(list(buckets.values())).sort_values("datetime").reset_index(drop=True)
+
+    def _request_bytes(self, urls: list[str], attempts: int | None = None) -> bytes:
+        tries = self.retries if attempts is None else max(1, int(attempts))
         last_error: Exception | None = None
-        for attempt in range(self.retries):
+        for attempt in range(tries):
+            saw_non_404 = False
             for url in urls:
                 try:
                     response = self.session.get(
@@ -201,14 +248,20 @@ class DukascopyClient:
                     )
                     if response.status_code == 404:
                         continue
+                    saw_non_404 = True
                     response.raise_for_status()
                     payload = bytes(response.content)
                     if payload:
                         return payload
                     last_error = RuntimeError("Dukascopy returned an empty payload")
                 except (requests.RequestException, OSError, ValueError) as exc:
+                    saw_non_404 = True
                     last_error = exc
-            if attempt + 1 < self.retries:
+            # A file that is absent on both Dukascopy hosts is not improved by
+            # repeating the exact request immediately; a later company cycle can retry.
+            if not saw_non_404:
+                return b""
+            if attempt + 1 < tries:
                 time.sleep(0.5 * (2**attempt))
         if last_error is not None:
             raise RuntimeError(f"Dukascopy request failed: {last_error}") from last_error
@@ -243,19 +296,58 @@ class DukascopyClient:
         market_days = max(1.0, max(1, int(output_size)) * minutes / 1440.0)
         return max(3, int(math.ceil(market_days * 1.6)) + 4)
 
+    @staticmethod
+    def _historical_weekdays(today: date, count: int) -> list[date]:
+        days: list[date] = []
+        cursor = today - timedelta(days=1)
+        while len(days) < count:
+            if cursor.weekday() < 5:
+                days.append(cursor)
+            cursor -= timedelta(days=1)
+        return sorted(days)
+
+    def _fetch_recent_tick_m1(self, instrument: str, divisor: float) -> pd.DataFrame:
+        now = datetime.now(timezone.utc)
+        current_minute = now.replace(second=0, microsecond=0)
+        current_hour = current_minute.replace(minute=0)
+        frames: list[pd.DataFrame] = []
+        # Newest first: on a transient provider problem we still have the best
+        # chance of returning the freshest completed bars quickly.
+        for offset in range(self.recent_tick_hours):
+            hour = current_hour - timedelta(hours=offset)
+            urls = [self._tick_url(base, instrument, hour) for base in self.BASE_URLS]
+            try:
+                payload = self._request_bytes(urls, attempts=min(2, self.retries))
+                frame = self.decode_tick_candles(payload, hour, divisor)
+            except (RuntimeError, requests.RequestException, lzma.LZMAError):
+                continue
+            if frame.empty:
+                continue
+            # Never feed a still-forming minute to strategy desks.
+            frame = frame[pd.to_datetime(frame["datetime"], utc=True) < current_minute]
+            if not frame.empty:
+                frames.append(frame)
+        if not frames:
+            return self._empty()
+        return (
+            pd.concat(frames, ignore_index=True)
+            .sort_values("datetime")
+            .drop_duplicates(subset=["datetime"], keep="last")
+            .reset_index(drop=True)
+        )
+
     def _fetch_m1(self, symbol: str, calendar_days: int) -> pd.DataFrame:
         instrument, divisor = self._instrument(symbol)
         days = min(max(3, int(calendar_days)), self.max_history_days)
         today = datetime.now(timezone.utc).date()
-        requested = [today - timedelta(days=offset) for offset in range(days - 1, -1, -1)]
+        # Current-day minute files are not assumed to exist. History comes from
+        # completed weekdays; live/intraday bars come from hourly tick files.
+        requested = self._historical_weekdays(today, days)
         frames: list[pd.DataFrame] = []
-        recovered_days: set[date] = set()
         retry_days: set[date] = set()
 
         with ThreadPoolExecutor(max_workers=min(self.max_workers, len(requested))) as pool:
-            future_map = {
-                pool.submit(self._load_day, instrument, day, divisor): day for day in requested
-            }
+            future_map = {pool.submit(self._load_day, instrument, day, divisor): day for day in requested}
             for future in as_completed(future_map):
                 day = future_map[future]
                 try:
@@ -265,28 +357,27 @@ class DukascopyClient:
                     continue
                 if frame is not None and not frame.empty:
                     frames.append(frame)
-                    recovered_days.add(day)
                 else:
                     retry_days.add(day)
 
-        # Dukascopy occasionally serves empty/transient day responses when several
-        # files are requested together. Recover those days one-by-one, newest first,
-        # so a temporary provider hiccup cannot zero the entire market-data snapshot.
+        # Retry failed historical weekdays serially. Holidays or genuinely absent
+        # files return immediately on dual 404s and do not create long retry storms.
         for day in sorted(retry_days, reverse=True):
-            if day in recovered_days:
-                continue
             try:
                 frame = self._download_day(instrument, day, divisor)
             except (RuntimeError, requests.RequestException, lzma.LZMAError):
                 continue
             if frame is not None and not frame.empty:
                 frames.append(frame)
-                recovered_days.add(day)
                 with self._cache_lock:
                     self._day_cache[(instrument, day)] = (time.monotonic(), frame.copy())
 
+        recent = self._fetch_recent_tick_m1(instrument, divisor)
+        if not recent.empty:
+            frames.append(recent)
+
         if not frames:
-            raise RuntimeError(f"No Dukascopy minute data returned for {symbol} after recovery retries")
+            raise RuntimeError(f"No Dukascopy minute or tick data returned for {symbol}")
         combined = pd.concat(frames, ignore_index=True)
         combined["datetime"] = pd.to_datetime(combined["datetime"], utc=True, errors="coerce")
         return (
@@ -324,11 +415,13 @@ class DukascopyClient:
     def price(self, symbol: str) -> float:
         instrument, divisor = self._instrument(symbol)
         now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
-        for offset in range(6):
+        for offset in range(self.recent_tick_hours):
             hour = now - timedelta(hours=offset)
             urls = [self._tick_url(base, instrument, hour) for base in self.BASE_URLS]
             try:
-                latest = self.decode_tick_payload(self._request_bytes(urls), hour, divisor)
+                latest = self.decode_tick_payload(
+                    self._request_bytes(urls, attempts=min(2, self.retries)), hour, divisor
+                )
             except RuntimeError:
                 latest = None
             if latest is not None and latest[1] > 0:
