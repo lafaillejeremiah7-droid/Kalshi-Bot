@@ -28,20 +28,10 @@ class Settings:
     poll_seconds: int = int(os.getenv("POLL_SECONDS", "60"))
     min_confidence: float = float(os.getenv("MIN_CONFIDENCE", "0.72"))
     min_consensus: int = int(os.getenv("MIN_CONSENSUS", "3"))
-    max_candidates: int = int(os.getenv("MAX_CANDIDATES", "20000"))
-    research_catalog_size: int = int(os.getenv("RESEARCH_CATALOG_SIZE", "600"))
     walk_forward_folds: int = int(os.getenv("WALK_FORWARD_FOLDS", "4"))
     min_walk_forward_folds: int = int(os.getenv("MIN_WALK_FORWARD_FOLDS", "2"))
     research_every_cycles: int = int(os.getenv("RESEARCH_EVERY_CYCLES", "60"))
-    enable_strategy_evolution: bool = _bool("ENABLE_STRATEGY_EVOLUTION", True)
-    strategy_library_path: str = os.getenv("STRATEGY_LIBRARY_PATH", "data/discovered_strategies.json")
-    discoveries_per_cycle: int = int(os.getenv("DISCOVERIES_PER_CYCLE", "250"))
-    discovery_library_size: int = int(os.getenv("DISCOVERY_LIBRARY_SIZE", "5000"))
-    enable_strategy_invention: bool = _bool("ENABLE_STRATEGY_INVENTION", True)
-    invention_library_path: str = os.getenv("INVENTION_LIBRARY_PATH", "data/invented_strategies.json")
-    invented_families_per_cycle: int = int(os.getenv("INVENTED_FAMILIES_PER_CYCLE", "6"))
-    invented_variants_per_family: int = int(os.getenv("INVENTED_VARIANTS_PER_FAMILY", "8"))
-    invention_library_size: int = int(os.getenv("INVENTION_LIBRARY_SIZE", "4000"))
+
     overfit_min_adjusted_score: float = float(os.getenv("OVERFIT_MIN_ADJUSTED_SCORE", "0.60"))
     overfit_min_profit_factor: float = float(os.getenv("OVERFIT_MIN_PROFIT_FACTOR", "1.15"))
     overfit_min_avg_r: float = float(os.getenv("OVERFIT_MIN_AVG_R", "0.05"))
@@ -50,19 +40,23 @@ class Settings:
     overfit_max_train_valid_gap: float = float(os.getenv("OVERFIT_MAX_TRAIN_VALID_GAP", "0.15"))
     overfit_max_drawdown_r: float = float(os.getenv("OVERFIT_MAX_DRAWDOWN_R", "10.0"))
     overfit_max_loss_streak: int = int(os.getenv("OVERFIT_MAX_LOSS_STREAK", "7"))
+
     spread_bps: float = float(os.getenv("SPREAD_BPS", "1.5"))
     slippage_bps: float = float(os.getenv("SLIPPAGE_BPS", "0.5"))
     backtest_stop_atr: float = float(os.getenv("BACKTEST_STOP_ATR", "1.20"))
     backtest_reward_risk: float = float(os.getenv("BACKTEST_REWARD_RISK", "1.70"))
+
     outcome_db_path: str = os.getenv("OUTCOME_DB_PATH", "data/xau_outcomes.sqlite3")
     outcome_max_age_hours: int = int(os.getenv("OUTCOME_MAX_AGE_HOURS", "72"))
     calibration_bin_width: float = float(os.getenv("CALIBRATION_BIN_WIDTH", "0.05"))
     calibration_prior_strength: float = float(os.getenv("CALIBRATION_PRIOR_STRENGTH", "20"))
+
     trade_timezone: str = os.getenv("TRADE_TIMEZONE", "America/Chicago")
     max_trades_per_day: int = int(os.getenv("MAX_TRADES_PER_DAY", "2"))
     max_stale_multiplier: float = float(os.getenv("MAX_STALE_MULTIPLIER", "4.0"))
     max_signal_delay_minutes: int = int(os.getenv("MAX_SIGNAL_DELAY_MINUTES", "5"))
     paper_mode: bool = _bool("PAPER_MODE", True)
+
     dxy_symbol: str = os.getenv("DXY_SYMBOL", "DXY")
     yield_symbol: str = os.getenv("YIELD_SYMBOL", "US10Y")
     macro_interval: str = os.getenv("MACRO_INTERVAL", "1h")
@@ -79,7 +73,6 @@ class Settings:
             raise RuntimeError("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are required when PAPER_MODE=false")
         if not 0.5 <= self.min_confidence <= 0.99:
             raise ValueError("MIN_CONFIDENCE must be between 0.50 and 0.99")
-        # Selector consensus intentionally counts only six directional specialist desks.
         if not 1 <= self.min_consensus <= 6:
             raise ValueError("MIN_CONSENSUS must be between 1 and 6")
         if self.output_size < 300:
@@ -90,26 +83,11 @@ class Settings:
             raise ValueError("POLL_SECONDS must be at least 10")
         if self.research_every_cycles < 1:
             raise ValueError("RESEARCH_EVERY_CYCLES must be at least 1")
-        if self.max_candidates < 1000:
-            raise ValueError("MAX_CANDIDATES must be at least 1000")
-        if self.research_catalog_size < 50:
-            raise ValueError("RESEARCH_CATALOG_SIZE must be at least 50")
         if self.walk_forward_folds < 2:
             raise ValueError("WALK_FORWARD_FOLDS must be at least 2")
         if not 2 <= self.min_walk_forward_folds <= self.walk_forward_folds:
             raise ValueError("MIN_WALK_FORWARD_FOLDS must be between 2 and WALK_FORWARD_FOLDS")
-        if self.discoveries_per_cycle < 0:
-            raise ValueError("DISCOVERIES_PER_CYCLE cannot be negative")
-        if self.discovery_library_size < 100:
-            raise ValueError("DISCOVERY_LIBRARY_SIZE must be at least 100")
-        if not 0 <= self.invented_families_per_cycle <= 50:
-            raise ValueError("INVENTED_FAMILIES_PER_CYCLE must be between 0 and 50")
-        if not 1 <= self.invented_variants_per_family <= 64:
-            raise ValueError("INVENTED_VARIANTS_PER_FAMILY must be between 1 and 64")
-        if self.invention_library_size < 100:
-            raise ValueError("INVENTION_LIBRARY_SIZE must be at least 100")
-        if self.enable_strategy_invention and self.invention_library_size < self.invented_variants_per_family:
-            raise ValueError("INVENTION_LIBRARY_SIZE must fit at least one invented family")
+
         if not 0.0 <= self.overfit_min_adjusted_score <= 1.0:
             raise ValueError("OVERFIT_MIN_ADJUSTED_SCORE must be between 0 and 1")
         if self.overfit_min_profit_factor < 1.0:
@@ -126,6 +104,7 @@ class Settings:
             raise ValueError("OVERFIT_MAX_DRAWDOWN_R must be positive")
         if self.overfit_max_loss_streak < 1:
             raise ValueError("OVERFIT_MAX_LOSS_STREAK must be at least 1")
+
         if self.spread_bps < 0 or self.slippage_bps < 0:
             raise ValueError("SPREAD_BPS and SLIPPAGE_BPS cannot be negative")
         if self.backtest_stop_atr <= 0:
@@ -144,10 +123,12 @@ class Settings:
             raise ValueError("MAX_STALE_MULTIPLIER must be at least 1.5")
         if not 1 <= self.max_signal_delay_minutes <= 15:
             raise ValueError("MAX_SIGNAL_DELAY_MINUTES must be between 1 and 15")
+
         try:
             ZoneInfo(self.trade_timezone)
         except ZoneInfoNotFoundError as exc:
             raise ValueError(f"Unknown TRADE_TIMEZONE: {self.trade_timezone}") from exc
+
         invalid = set(self.timeframes) - allowed
         if invalid:
             raise ValueError(f"Unsupported TIMEFRAMES: {sorted(invalid)}")
