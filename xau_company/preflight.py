@@ -17,15 +17,18 @@ def _required(name: str) -> str:
 
 def check_dukascopy() -> tuple[float, str]:
     symbol = os.getenv("SYMBOL", "XAU/USD")
-    client = DukascopyClient(timeout=20, retries=3, max_workers=1)
+    client = DukascopyClient(timeout=8, retries=2, max_workers=1, recent_tick_hours=3)
 
-    # Preflight is a live-readiness check, not a historical backfill. Validate
-    # the same hourly tick source used by the runtime's intraday fallback so an
-    # absent current-day candle archive cannot make startup appear unhealthy.
-    instrument, divisor = client._instrument(symbol)
-    candles = client._fetch_recent_tick_m1(instrument, divisor)
+    # Production Dukascopy clients validate the live hourly tick path directly.
+    # The public candles() fallback keeps compatibility with lightweight test
+    # doubles and older client implementations.
+    if hasattr(client, "_fetch_recent_tick_m1") and hasattr(client, "_instrument"):
+        instrument, divisor = client._instrument(symbol)
+        candles = client._fetch_recent_tick_m1(instrument, divisor)
+    else:
+        candles = client.candles(symbol, "1min", 10)
     if candles.empty:
-        raise RuntimeError("Dukascopy returned no recent XAU/USD tick-derived minute candles")
+        raise RuntimeError("Dukascopy returned no XAU/USD minute candles")
 
     price = client.price(symbol)
     if price <= 0:
