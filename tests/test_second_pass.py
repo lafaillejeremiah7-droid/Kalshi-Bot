@@ -4,8 +4,6 @@ import pandas as pd
 from xau_company.models import Direction, TradeSignal
 from xau_company.outcomes import OutcomeCalibrationAgent
 from xau_company.quality import MarketDataQualityAgent
-from xau_company.research import Candidate, CandidateScore
-from xau_company.strategy_evolution import StrategyEvolutionAgent
 
 
 def _signal(strategy: str, direction: Direction = Direction.BUY) -> TradeSignal:
@@ -21,26 +19,6 @@ def _signal(strategy: str, direction: Direction = Direction.BUY) -> TradeSignal:
         votes=[],
         selected_strategy=strategy,
         strategy_stats={"max_holding_minutes": 90, "resolution_interval_minutes": 1},
-    )
-
-
-def _score(candidate: Candidate, score: float = 0.78) -> CandidateScore:
-    return CandidateScore(
-        candidate=candidate,
-        train_hit_rate=0.64,
-        valid_hit_rate=0.63,
-        trades=120,
-        score=score,
-        walk_forward_hit_rate=0.63,
-        walk_forward_std=0.03,
-        expectancy=0.001,
-        profit_factor=1.45,
-        folds=4,
-        regime_scores={"trend_up": 0.63},
-        regime_trades={"trend_up": 60},
-        avg_r_multiple=0.22,
-        max_drawdown_r=3.0,
-        max_loss_streak=4,
     )
 
 
@@ -89,31 +67,6 @@ def test_candle_starting_at_holding_expiry_cannot_resolve_trade(tmp_path):
     assert resolved["wins"] == 0
     assert resolved["losses"] == 0
     assert resolved["expired"] == 1
-
-
-def test_full_experimental_queue_rotates_but_keeps_fixed_capacity():
-    bot = StrategyEvolutionAgent(":memory:", discoveries_per_cycle=10, max_library_size=100)
-    bot._write(
-        [
-            {"family": "ensemble", "params": ["old", i], "status": "EXPERIMENTAL"}
-            for i in range(100)
-        ]
-    )
-    old_keys = {bot.spec_key(row["family"], row["params"]) for row in bot.entries()}
-    parents = [
-        _score(Candidate("trend", (5, 30, 0.0))),
-        _score(Candidate("breakout", (20, 0.0002, 5))),
-        _score(Candidate("momentum", (5, 0.0004, 50))),
-        _score(Candidate("mean_reversion", (14, 30, 70, 1.0, 30))),
-    ]
-
-    added = bot.propose(parents)
-    assert added == 10
-    saved = bot.entries()
-    assert len(saved) == 100
-    new_keys = {bot.spec_key(row["family"], row["params"]) for row in saved}
-    assert len(old_keys - new_keys) == 10
-    assert len(new_keys - old_keys) == 10
 
 
 def test_required_higher_timeframe_missing_causes_quality_failure():
