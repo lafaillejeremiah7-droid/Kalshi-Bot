@@ -121,8 +121,7 @@ def test_research_catalog_contains_only_unique_canonical_methodologies(monkeypat
     selected = lab._balanced_candidates()
     assert len(selected) == 437
     assert lab.last_universe_size == 437
-    assert len({c.family for c in selected}) == 437
-    assert all(c.params == () for c in selected)
+    assert len({c.strategy_id for c in selected}) == 437
     assert lab.catalog_size == 109
 
 

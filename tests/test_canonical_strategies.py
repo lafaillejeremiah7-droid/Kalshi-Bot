@@ -1,4 +1,3 @@
-import inspect
 import json
 
 import numpy as np
@@ -29,17 +28,13 @@ def test_catalog_is_exactly_437_unique_methodologies():
     assert [s.strategy_id for s in STRATEGIES] == [f"S{i:03d}" for i in range(1, 438)]
 
 
-def test_parameter_grid_architecture_is_gone(monkeypatch):
-    import xau_company.research as research
-    source = inspect.getsource(research)
-    assert "itertools" not in source
-    assert "product(" not in source
+def test_canonical_candidate_model_has_exactly_one_id_per_methodology(monkeypatch):
     monkeypatch.setenv("XAU_RESEARCH_USE_ALL_437", "1")
     lab = StrategyResearchAgent(max_candidates=437, catalog_size=109)
     candidates = list(lab.candidates())
     assert len(candidates) == 437
-    assert all(c.params == () for c in candidates)
-    assert len({c.family for c in candidates}) == 437
+    assert len({c.strategy_id for c in candidates}) == 437
+    assert not hasattr(candidates[0], "params")
     assert lab.last_universe_size == 437
     assert lab.catalog_size == 109
 
@@ -79,12 +74,10 @@ def test_supported_canonical_signals_are_causal_prefix_stable():
     assert checked >= 350
 
 
-def test_nonempty_params_are_rejected(monkeypatch):
-    monkeypatch.setenv("XAU_RESEARCH_USE_ALL_437", "1")
-    lab = StrategyResearchAgent()
+def test_candidate_constructor_has_no_parameter_slot():
     try:
-        lab._signal(_frame(), Candidate("S001", (1, 2, 3)))
-    except ValueError as exc:
-        assert "parameter-grid" in str(exc)
+        Candidate("S001", (1, 2, 3))
+    except TypeError:
+        pass
     else:
-        raise AssertionError("parameter variants must never be accepted")
+        raise AssertionError("canonical Candidate must accept only one strategy ID")

@@ -54,7 +54,7 @@ class AdaptiveStrategyResearchAgent(StrategyResearchAgent):
         tested_trials = 437 if seed_tested_trials is None else max(1, int(seed_tested_trials))
 
         for result in research_catalog:
-            if result.candidate.family not in self.HORIZONS:
+            if result.candidate.strategy_id not in self.HORIZONS:
                 continue
             seed_audited += 1
             audit = self.overfit_auditor.audit(result, tested_trials=tested_trials)
@@ -73,7 +73,7 @@ class AdaptiveStrategyResearchAgent(StrategyResearchAgent):
         strategy_buckets: dict[str, list[float]] = {}
         category_buckets: dict[str, list[float]] = {}
         for result in self.catalog:
-            sid = result.candidate.family
+            sid = result.candidate.strategy_id
             strategy_buckets.setdefault(sid, []).append(result.score)
             definition = BY_ID.get(sid)
             if definition is not None:

@@ -18,9 +18,8 @@ from .models import Direction
 
 @dataclass(frozen=True)
 class Candidate:
-    """One canonical methodology. params is retained only for API compatibility and must stay empty."""
-    family: str
-    params: tuple = ()
+    """Exactly one canonical strategy methodology, identified only by immutable ID."""
+    strategy_id: str
 
 
 @dataclass
@@ -46,9 +45,8 @@ class CandidateScore:
 class StrategyResearchAgent:
     """Research only canonical, pre-audited strategies.
 
-    The old Cartesian parameter-grid universe was deleted. A strategy is now one
-    methodology with one immutable id. Parameter combinations are never emitted
-    as candidates and therefore can never inflate the strategy count.
+    A strategy is one methodology with one immutable ID. The research model has
+    no parameter-variant candidate type and can therefore represent each methodology once.
 
     The live engine is fail-closed: until the historical audit publishes
     ``surviving_strategies.json``, no strategy is eligible for live research.
@@ -106,18 +104,16 @@ class StrategyResearchAgent:
         ids = self._survivor_ids()
         self.last_universe_size = len(ids)
         for sid in ids[: self.max_candidates]:
-            yield Candidate(sid, ())
+            yield Candidate(sid)
 
     def _balanced_candidates(self) -> list[Candidate]:
-        # There are no parameter variants to balance. Each methodology appears once.
+        # Each methodology appears exactly once.
         return list(self.candidates())
 
     def _signal(self, df: pd.DataFrame, candidate: Candidate, cache=None) -> pd.Series:
-        if candidate.params:
-            raise ValueError("Canonical strategies do not accept parameter-grid variants")
-        strategy = BY_ID.get(candidate.family)
+        strategy = BY_ID.get(candidate.strategy_id)
         if strategy is None:
-            raise ValueError(f"Unknown canonical strategy id: {candidate.family}")
+            raise ValueError(f"Unknown canonical strategy id: {candidate.strategy_id}")
         return CanonicalSignalEngine(df).signal(strategy)
 
     def current_direction(self, df: pd.DataFrame, candidate: Candidate) -> Direction:
@@ -177,7 +173,7 @@ class StrategyResearchAgent:
             return None
         atr_values = atr(df, 14)
         trades = self.backtester.simulate(
-            df, signal, atr_values, max_holding=self.HORIZONS.get(candidate.family, 6)
+            df, signal, atr_values, max_holding=self.HORIZONS.get(candidate.strategy_id, 6)
         )
         if len(trades) < 20:
             return None
@@ -284,8 +280,8 @@ class StrategyResearchAgent:
         buckets: dict[str, list[float]] = {}
         category_buckets: dict[str, list[float]] = {}
         for result in self.catalog:
-            buckets.setdefault(result.candidate.family, []).append(result.score)
-            category = BY_ID[result.candidate.family].category
+            buckets.setdefault(result.candidate.strategy_id, []).append(result.score)
+            category = BY_ID[result.candidate.strategy_id].category
             category_buckets.setdefault(category, []).append(result.score)
         self.family_quality = {k: float(np.clip(np.mean(v), 0.35, 0.90)) for k, v in buckets.items()}
         self.category_quality = {k: float(np.clip(np.mean(v), 0.35, 0.90)) for k, v in category_buckets.items()}

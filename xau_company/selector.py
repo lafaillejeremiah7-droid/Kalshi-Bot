@@ -27,8 +27,8 @@ class StrategyPick:
 
     @property
     def label(self) -> str:
-        strategy = BY_ID.get(self.score.candidate.family)
-        return strategy.name if strategy is not None else self.score.candidate.family
+        strategy = BY_ID.get(self.score.candidate.strategy_id)
+        return strategy.name if strategy is not None else self.score.candidate.strategy_id
 
 
 class StrategySelectorAgent:
@@ -94,9 +94,9 @@ class StrategySelectorAgent:
         self.min_probability = min_probability
         self.min_agreement = max(1, int(min_agreement))
 
-    def _family_regime_fit(self, family: str, regime: str) -> float:
-        strategy = BY_ID.get(family)
-        category = strategy.category if strategy is not None else family
+    def _strategy_regime_fit(self, strategy_id: str, regime: str) -> float:
+        strategy = BY_ID.get(strategy_id)
+        category = strategy.category if strategy is not None else strategy_id
         return self.REGIME_FIT.get(regime, {}).get(category, 0.55)
 
     def _historical_regime_fit(self, result: CandidateScore, regime: str) -> tuple[float, int]:
@@ -185,9 +185,9 @@ class StrategySelectorAgent:
             if agreeing < self.min_agreement:
                 continue
 
-            family_fit = self._family_regime_fit(result.candidate.family, regime)
+            strategy_fit = self._strategy_regime_fit(result.candidate.strategy_id, regime)
             regime_history, regime_samples = self._historical_regime_fit(result, regime)
-            regime_fit = family_fit * 0.35 + regime_history * 0.65
+            regime_fit = strategy_fit * 0.35 + regime_history * 0.65
             timeframe_alignment = self._timeframe_alignment(direction, votes)
             macro_alignment = self._macro_alignment(direction, votes)
 

@@ -121,7 +121,7 @@ class BossAgent:
         oos_trades = sum(max(0, int(n)) for n in candidate.regime_trades.values())
         if oos_trades <= 0:
             oos_trades = int(candidate.trades)
-        holding_bars = int(self.lab.HORIZONS.get(candidate.candidate.family, 4))
+        holding_bars = int(self.lab.HORIZONS.get(candidate.candidate.strategy_id, 4))
         research_minutes = int(INTERVAL_MINUTES.get(self.research_interval, 15))
         max_holding_minutes = holding_bars * research_minutes
 
@@ -151,8 +151,7 @@ class BossAgent:
             votes=votes,
             selected_strategy=pick.label,
             strategy_stats={
-                "family": candidate.candidate.family,
-                "params": candidate.candidate.params,
+                "strategy_id": candidate.candidate.strategy_id,
                 "train_hit_rate": candidate.train_hit_rate,
                 "valid_hit_rate": candidate.valid_hit_rate,
                 "walk_forward_hit_rate": candidate.walk_forward_hit_rate,
