@@ -23,9 +23,15 @@ if [[ ! -f .env ]]; then
   echo "Created .env from .env.example for optional local/manual runs."
 fi
 
-chmod +x bin/xau
+# Keep installer-created executable-bit changes from appearing as source edits.
+git config core.fileMode false
+
 mkdir -p "$HOME/.local/bin"
-ln -sfn "$ROOT/bin/xau" "$HOME/.local/bin/xau"
+cat > "$HOME/.local/bin/xau" <<EOF
+#!/bin/sh
+exec bash "$ROOT/bin/xau" "\$@"
+EOF
+chmod 700 "$HOME/.local/bin/xau"
 
 if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
   if ! grep -Fq 'export PATH="$HOME/.local/bin:$PATH"' "$HOME/.bashrc" 2>/dev/null; then
