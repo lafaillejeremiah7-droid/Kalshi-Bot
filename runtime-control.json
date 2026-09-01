@@ -1,5 +1,5 @@
 {
-  "enabled": true,
-  "generation": 11,
-  "reason": "Deploy verified dashboard activity and roster fixes"
+  "enabled": false,
+  "generation": 12,
+  "reason": "Stopped for full historical XAUUSD company backtest"
 }
