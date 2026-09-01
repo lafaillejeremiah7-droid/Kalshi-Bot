@@ -32,6 +32,7 @@ class ExperimentPlan:
     bootstrap_samples: int = 1000
     bootstrap_block_size: int = 10
     random_seed: int = 17
+    significance_level: float = 0.05
     min_train_markets: int = 100
     validation_markets: int = 20
     test_markets: int = 20
@@ -54,6 +55,8 @@ class ExperimentPlan:
             raise ValueError("min_leadlag_pairs must be at least 3")
         if self.bootstrap_samples <= 0 or self.bootstrap_block_size <= 0:
             raise ValueError("bootstrap settings must be positive")
+        if not 0 < self.significance_level < 1:
+            raise ValueError("significance_level must be between 0 and 1")
         if min(
             self.min_train_markets,
             self.validation_markets,
@@ -128,6 +131,7 @@ class LeadLagResult:
     bootstrap_ci_low: float | None
     bootstrap_ci_high: float | None
     eligible: bool
+    significant: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,6 +146,17 @@ class LeadLagReport:
             result
             for result in self.results
             if result.eligible and result.correlation is not None
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda result: abs(result.correlation or 0.0))
+
+    @property
+    def best_significant(self) -> LeadLagResult | None:
+        candidates = [
+            result
+            for result in self.results
+            if result.significant and result.correlation is not None
         ]
         if not candidates:
             return None
@@ -257,6 +272,9 @@ def benchmark_probability_walkforward(
     ordered_market_ids: Sequence[str],
     plan: ExperimentPlan,
 ) -> tuple[FoldProbabilityBenchmark, ...]:
+    if len(set(ordered_market_ids)) != len(ordered_market_ids):
+        raise ExperimentError("ordered_market_ids must contain each market exactly once")
+
     folds = expanding_walkforward(
         ordered_market_ids,
         min_train=plan.min_train_markets,
@@ -264,6 +282,9 @@ def benchmark_probability_walkforward(
         test_size=plan.test_markets,
         step=plan.step_markets,
     )
+    if not folds:
+        raise ExperimentError("insufficient markets for the predeclared walk-forward plan")
+
     results: list[FoldProbabilityBenchmark] = []
     for fold_index, fold in enumerate(folds):
         test_ids = set(fold.test)
@@ -300,17 +321,42 @@ def scan_receive_time_lead_lag(
     """Test whether leader returns precede follower returns using receive time only.
 
     Positive lag means a leader return ending at time t is paired with a
-    follower return ending at t + lag. Fisher p-values are approximate because
-    high-frequency returns can be serially dependent; block-bootstrap intervals
-    are reported alongside them.
+    follower return ending at t + lag. Each series is resampled independently,
+    so the follower can contribute a valid later move without requiring a fresh
+    leader observation at the follower timestamp. Inferential statistics are
+    emitted only after the predeclared minimum-pair gate is met.
     """
     _validate_timed_prices(leader, "leader")
     _validate_timed_prices(follower, "follower")
 
     step_ns = plan.grid_step_s * 1_000_000_000
     max_age_ns = int(plan.max_asof_age_s * 1_000_000_000)
-    grid = _asof_grid(leader, follower, step_ns=step_ns, max_age_ns=max_age_ns)
-    leader_returns, follower_returns = _grid_log_returns(grid, step_ns)
+    first_recv = max(leader[0].recv_ts_ns, follower[0].recv_ts_ns)
+    last_recv = max(leader[-1].recv_ts_ns, follower[-1].recv_ts_ns)
+    first_grid = ((first_recv + step_ns - 1) // step_ns) * step_ns
+    last_grid = (last_recv // step_ns) * step_ns
+
+    if first_grid > last_grid:
+        leader_grid: dict[int, float] = {}
+        follower_grid: dict[int, float] = {}
+    else:
+        leader_grid = _asof_series(
+            leader,
+            first_grid=first_grid,
+            last_grid=last_grid,
+            step_ns=step_ns,
+            max_age_ns=max_age_ns,
+        )
+        follower_grid = _asof_series(
+            follower,
+            first_grid=first_grid,
+            last_grid=last_grid,
+            step_ns=step_ns,
+            max_age_ns=max_age_ns,
+        )
+
+    leader_returns = _series_log_returns(leader_grid, step_ns)
+    follower_returns = _series_log_returns(follower_grid, step_ns)
 
     tests = len(plan.lead_lags_s)
     results: list[LeadLagResult] = []
@@ -333,11 +379,28 @@ def scan_receive_time_lead_lag(
                     bootstrap_ci_low=None,
                     bootstrap_ci_high=None,
                     eligible=False,
+                    significant=False,
                 )
             )
             continue
 
         correlation = _pearson_pairs(pairs)
+        if not eligible:
+            results.append(
+                LeadLagResult(
+                    lag_s=lag_s,
+                    pairs=len(pairs),
+                    correlation=correlation,
+                    raw_p_value=None,
+                    bonferroni_p_value=None,
+                    bootstrap_ci_low=None,
+                    bootstrap_ci_high=None,
+                    eligible=False,
+                    significant=False,
+                )
+            )
+            continue
+
         raw_p = _fisher_two_sided_p(correlation, len(pairs))
         adjusted_p = min(1.0, raw_p * tests)
         ci_low, ci_high = _moving_block_bootstrap_ci(
@@ -345,6 +408,10 @@ def scan_receive_time_lead_lag(
             samples=plan.bootstrap_samples,
             block_size=plan.bootstrap_block_size,
             seed=plan.random_seed + lag_s * 1009,
+        )
+        significant = (
+            adjusted_p <= plan.significance_level
+            and (ci_low > 0 or ci_high < 0)
         )
         results.append(
             LeadLagResult(
@@ -355,13 +422,14 @@ def scan_receive_time_lead_lag(
                 bonferroni_p_value=adjusted_p,
                 bootstrap_ci_low=ci_low,
                 bootstrap_ci_high=ci_high,
-                eligible=eligible,
+                eligible=True,
+                significant=significant,
             )
         )
 
     return LeadLagReport(
         plan_digest=plan.digest,
-        grid_points=len(grid),
+        grid_points=len(set(leader_grid) & set(follower_grid)),
         results=tuple(results),
     )
 
@@ -385,6 +453,29 @@ def _validate_timed_prices(points: Sequence[TimedPrice], name: str) -> None:
         previous = point.recv_ts_ns
 
 
+def _asof_series(
+    points: Sequence[TimedPrice],
+    *,
+    first_grid: int,
+    last_grid: int,
+    step_ns: int,
+    max_age_ns: int,
+) -> dict[int, float]:
+    index = 0
+    latest: TimedPrice | None = None
+    grid: dict[int, float] = {}
+    for timestamp in range(first_grid, last_grid + 1, step_ns):
+        while index < len(points) and points[index].recv_ts_ns <= timestamp:
+            latest = points[index]
+            index += 1
+        if latest is None:
+            continue
+        if timestamp - latest.recv_ts_ns > max_age_ns:
+            continue
+        grid[timestamp] = latest.price
+    return grid
+
+
 def _asof_grid(
     leader: Sequence[TimedPrice],
     follower: Sequence[TimedPrice],
@@ -399,33 +490,37 @@ def _asof_grid(
     if first_grid > last_grid:
         return {}
 
-    leader_index = follower_index = 0
-    latest_leader: TimedPrice | None = None
-    latest_follower: TimedPrice | None = None
-    grid: dict[int, tuple[float, float]] = {}
+    leader_grid = _asof_series(
+        leader,
+        first_grid=first_grid,
+        last_grid=last_grid,
+        step_ns=step_ns,
+        max_age_ns=max_age_ns,
+    )
+    follower_grid = _asof_series(
+        follower,
+        first_grid=first_grid,
+        last_grid=last_grid,
+        step_ns=step_ns,
+        max_age_ns=max_age_ns,
+    )
+    return {
+        timestamp: (leader_grid[timestamp], follower_grid[timestamp])
+        for timestamp in sorted(set(leader_grid) & set(follower_grid))
+    }
 
-    for timestamp in range(first_grid, last_grid + 1, step_ns):
-        while (
-            leader_index < len(leader)
-            and leader[leader_index].recv_ts_ns <= timestamp
-        ):
-            latest_leader = leader[leader_index]
-            leader_index += 1
-        while (
-            follower_index < len(follower)
-            and follower[follower_index].recv_ts_ns <= timestamp
-        ):
-            latest_follower = follower[follower_index]
-            follower_index += 1
 
-        if latest_leader is None or latest_follower is None:
+def _series_log_returns(
+    grid: Mapping[int, float],
+    step_ns: int,
+) -> dict[int, float]:
+    returns: dict[int, float] = {}
+    for timestamp in sorted(grid):
+        previous_timestamp = timestamp - step_ns
+        if previous_timestamp not in grid:
             continue
-        if timestamp - latest_leader.recv_ts_ns > max_age_ns:
-            continue
-        if timestamp - latest_follower.recv_ts_ns > max_age_ns:
-            continue
-        grid[timestamp] = (latest_leader.price, latest_follower.price)
-    return grid
+        returns[timestamp] = math.log(grid[timestamp] / grid[previous_timestamp])
+    return returns
 
 
 def _grid_log_returns(
