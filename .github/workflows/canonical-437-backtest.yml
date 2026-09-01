@@ -42,6 +42,15 @@ jobs:
           pip install -r requirements.txt
           pip install "pandas>=2.2,<3"
 
+      - name: Verify retired 27k architecture is absent
+        run: |
+          set -euo pipefail
+          patterns='27,801|27_801|27801|tens of thousands|from itertools import product|strategy_library_path|enable_evolution|enable_invention|invention_library_path|discoveries_per_cycle|invented_variants_per_family|MAX_CANDIDATES|RESEARCH_CATALOG_SIZE'
+          if grep -RInE "$patterns" --exclude-dir=.git --exclude='canonical-437-backtest.yml' .; then
+            echo "Retired strategy-universe residue found"
+            exit 1
+          fi
+
       - name: Compile canonical research path
         run: |
           python -m py_compile scripts/canonical_437_backtest.py
