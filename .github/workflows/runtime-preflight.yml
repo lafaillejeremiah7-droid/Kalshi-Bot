@@ -1,6 +1,11 @@
 name: Runtime Preflight
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - "xau_company/preflight.py"
+      - ".github/workflows/runtime-preflight.yml"
   workflow_dispatch:
 
 permissions:
