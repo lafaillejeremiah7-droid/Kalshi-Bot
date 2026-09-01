@@ -33,13 +33,14 @@ def frame(
     final_average: str | None = None,
     sample_count: int | None = None,
     brti_fresh: bool = True,
+    seconds_to_close: float = 10.0,
 ) -> SynchronizedFrame:
     return SynchronizedFrame(
         decision_recv_ts_ns=decision_ts_ns,
         market_ticker="KXBTC15M-TEST",
         target_price=Decimal(target),
-        close_ts_ns=decision_ts_ns + 10_000_000_000,
-        seconds_to_close=10.0,
+        close_ts_ns=decision_ts_ns + int(seconds_to_close * 1_000_000_000),
+        seconds_to_close=seconds_to_close,
         yes_bid=Decimal("0.45"),
         yes_bid_size=Decimal("8"),
         yes_ask=Decimal("0.49"),
@@ -102,6 +103,25 @@ def test_event_timed_volatility_and_normalized_distance_are_mathematically_consi
     assert row.brti_log_distance_to_target == pytest.approx(expected_sigma)
     assert row.normalized_distance_to_target == pytest.approx(1 / math.sqrt(10))
     assert row.baseline_ready
+
+
+def test_expiry_does_not_emit_infinite_normalized_distance():
+    materializer = FeatureMaterializer()
+    materializer.materialize(
+        frame(decision_ts_ns=T0, brti_value="100", brti_recv_ts_ns=T0)
+    )
+    row = materializer.materialize(
+        frame(
+            decision_ts_ns=T0 + 1_000_000_000,
+            brti_value="101",
+            brti_recv_ts_ns=T0 + 1_000_000_000,
+            seconds_to_close=0.0,
+        )
+    )
+
+    assert row.brti_vol_per_sqrt_second is not None
+    assert row.normalized_distance_to_target is None
+    assert not row.baseline_ready
 
 
 def test_final_minute_required_remaining_average_uses_known_rolling_sum():
