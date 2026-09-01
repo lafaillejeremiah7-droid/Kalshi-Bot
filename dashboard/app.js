@@ -38,6 +38,7 @@ const els = {
 };
 
 let built = false;
+let rosterSignature = "";
 let firstState = true;
 const seenHandoffs = new Set();
 let selectedRoom = "all";
@@ -65,6 +66,11 @@ function shortTime(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "—";
   return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+function employeeRosterSignature(state) {
+  const employees = Array.isArray(state.employees) ? state.employees : [];
+  return employees.map(employee => `${employee.id}:${employee.room}`).join("|");
 }
 
 function createFigure() {
@@ -130,6 +136,7 @@ function buildFloor(state) {
     room.append(header, workers);
     els.floorplan.append(room);
   }
+  rosterSignature = employeeRosterSignature(state);
   built = true;
 }
 
@@ -141,22 +148,26 @@ function stateClass(state) {
 
 function updateWorkers(state) {
   const employees = Array.isArray(state.employees) ? state.employees : [];
-  let active = 0;
   for (const employee of employees) {
     const worker = document.querySelector(`[data-worker="${CSS.escape(employee.id)}"]`);
     if (!worker) continue;
     const normalized = stateClass(employee.state);
-    worker.className = `worker is-${normalized}`;
+    // "Online/active" and "currently doing a task" are intentionally separate.
+    // The live dashboard is served only while the company session is running,
+    // so every canonical roster member is online even when its current task is idle.
+    worker.className = `worker is-${normalized} is-online`;
     worker.dataset.state = normalized;
-    worker.title = [employee.name, employee.task, employee.detail].filter(Boolean).join(" — ");
+    worker.dataset.online = "true";
+    worker.title = ["ONLINE", employee.name, employee.task, employee.detail].filter(Boolean).join(" — ");
     const task = worker.querySelector("[data-task]");
     if (task) {
       const direction = employee.direction && employee.direction !== "HOLD" ? ` · ${employee.direction}` : "";
       task.textContent = `${employee.task || "Waiting"}${direction}`;
     }
-    if (normalized !== "idle") active += 1;
   }
-  els.activeCount.textContent = String(active);
+  // Header reports roster availability, not the subset whose task-state is non-idle.
+  // This prevents a healthy 28-bot company from being mislabeled 10/28 active.
+  els.activeCount.textContent = String(employees.length);
 }
 
 function updateSystem(state) {
@@ -335,7 +346,8 @@ function applyRoomFilter() {
 }
 
 function render(state) {
-  if (!built) buildFloor(state);
+  const nextRosterSignature = employeeRosterSignature(state);
+  if (!built || nextRosterSignature !== rosterSignature) buildFloor(state);
   updateWorkers(state);
   updateSystem(state);
   updateBoss(state);
