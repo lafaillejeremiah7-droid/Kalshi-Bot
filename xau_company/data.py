@@ -69,8 +69,8 @@ class DukascopyClient:
         self,
         api_key: str = "",
         timeout: int = 20,
-        retries: int = 3,
-        max_workers: int = 6,
+        retries: int = 4,
+        max_workers: int = 2,
         current_day_ttl_seconds: int = 30,
         max_history_days: int = 400,
         session: Any | None = None,
@@ -78,7 +78,7 @@ class DukascopyClient:
         del api_key
         self.timeout = max(1, int(timeout))
         self.retries = max(1, int(retries))
-        self.max_workers = max(1, min(12, int(max_workers)))
+        self.max_workers = max(1, min(4, int(max_workers)))
         self.current_day_ttl_seconds = max(5, int(current_day_ttl_seconds))
         self.max_history_days = max(10, int(max_history_days))
         self.session = session or requests.Session()
@@ -133,9 +133,6 @@ class DukascopyClient:
             raise RuntimeError("Unexpected Dukascopy candle record length")
 
         records = list(_CANDLE_STRUCT.iter_unpack(raw))
-        # Dukascopy candle readers in the wild have historically documented both
-        # O,C,L,H and O,H,L,C field labels. Detect the valid interpretation from
-        # OHLC invariants and default to O,C,L,H when bars are perfectly flat.
         score_oclh = sum(cls._ohlc_valid(r[1], r[4], r[3], r[2]) for r in records)
         score_ohlc = sum(cls._ohlc_valid(r[1], r[2], r[3], r[4]) for r in records)
         use_oclh = score_oclh >= score_ohlc
@@ -195,16 +192,24 @@ class DukascopyClient:
                     response = self.session.get(
                         url,
                         timeout=self.timeout,
-                        headers={"User-Agent": "XAUUSD-Company/1.0"},
+                        headers={
+                            "User-Agent": "XAUUSD-Company/1.0",
+                            "Accept-Encoding": "identity",
+                            "Cache-Control": "no-cache",
+                            "Connection": "close",
+                        },
                     )
                     if response.status_code == 404:
                         continue
                     response.raise_for_status()
-                    return bytes(response.content)
+                    payload = bytes(response.content)
+                    if payload:
+                        return payload
+                    last_error = RuntimeError("Dukascopy returned an empty payload")
                 except (requests.RequestException, OSError, ValueError) as exc:
                     last_error = exc
             if attempt + 1 < self.retries:
-                time.sleep(0.35 * (2**attempt))
+                time.sleep(0.5 * (2**attempt))
         if last_error is not None:
             raise RuntimeError(f"Dukascopy request failed: {last_error}") from last_error
         return b""
@@ -225,8 +230,9 @@ class DukascopyClient:
                 return frame.copy()
 
         frame = self._download_day(instrument, day, divisor)
-        with self._cache_lock:
-            self._day_cache[key] = (time.monotonic(), frame.copy())
+        if not frame.empty:
+            with self._cache_lock:
+                self._day_cache[key] = (time.monotonic(), frame.copy())
         return frame
 
     @staticmethod
@@ -243,19 +249,44 @@ class DukascopyClient:
         today = datetime.now(timezone.utc).date()
         requested = [today - timedelta(days=offset) for offset in range(days - 1, -1, -1)]
         frames: list[pd.DataFrame] = []
+        recovered_days: set[date] = set()
+        retry_days: set[date] = set()
+
         with ThreadPoolExecutor(max_workers=min(self.max_workers, len(requested))) as pool:
             future_map = {
                 pool.submit(self._load_day, instrument, day, divisor): day for day in requested
             }
             for future in as_completed(future_map):
+                day = future_map[future]
                 try:
                     frame = future.result()
                 except (RuntimeError, requests.RequestException, lzma.LZMAError):
+                    retry_days.add(day)
                     continue
                 if frame is not None and not frame.empty:
                     frames.append(frame)
+                    recovered_days.add(day)
+                else:
+                    retry_days.add(day)
+
+        # Dukascopy occasionally serves empty/transient day responses when several
+        # files are requested together. Recover those days one-by-one, newest first,
+        # so a temporary provider hiccup cannot zero the entire market-data snapshot.
+        for day in sorted(retry_days, reverse=True):
+            if day in recovered_days:
+                continue
+            try:
+                frame = self._download_day(instrument, day, divisor)
+            except (RuntimeError, requests.RequestException, lzma.LZMAError):
+                continue
+            if frame is not None and not frame.empty:
+                frames.append(frame)
+                recovered_days.add(day)
+                with self._cache_lock:
+                    self._day_cache[(instrument, day)] = (time.monotonic(), frame.copy())
+
         if not frames:
-            raise RuntimeError(f"No Dukascopy minute data returned for {symbol}")
+            raise RuntimeError(f"No Dukascopy minute data returned for {symbol} after recovery retries")
         combined = pd.concat(frames, ignore_index=True)
         combined["datetime"] = pd.to_datetime(combined["datetime"], utc=True, errors="coerce")
         return (
@@ -293,7 +324,7 @@ class DukascopyClient:
     def price(self, symbol: str) -> float:
         instrument, divisor = self._instrument(symbol)
         now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
-        for offset in range(3):
+        for offset in range(6):
             hour = now - timedelta(hours=offset)
             urls = [self._tick_url(base, instrument, hour) for base in self.BASE_URLS]
             try:
