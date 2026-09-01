@@ -68,6 +68,39 @@ def test_dukascopy_preflight_rejects_missing_market_data(monkeypatch):
         preflight.check_dukascopy()
 
 
+def test_dukascopy_preflight_retries_transient_failure(monkeypatch):
+    calls = {"count": 0}
+
+    def flaky():
+        calls["count"] += 1
+        if calls["count"] < 3:
+            raise RuntimeError("temporary empty feed")
+        return 2500.25, "2026-08-31 23:59:00+00:00"
+
+    monkeypatch.setattr(preflight.time, "sleep", lambda _: None)
+    price, stamp = preflight.check_dukascopy_with_retries(
+        attempts=3, delay_seconds=0, check=flaky
+    )
+    assert calls["count"] == 3
+    assert price == 2500.25
+    assert "23:59:00" in stamp
+
+
+def test_dukascopy_preflight_fails_closed_after_retries(monkeypatch):
+    calls = {"count": 0}
+
+    def always_fails():
+        calls["count"] += 1
+        raise RuntimeError("temporary empty feed")
+
+    monkeypatch.setattr(preflight.time, "sleep", lambda _: None)
+    with pytest.raises(RuntimeError, match="failed after 3 attempts"):
+        preflight.check_dukascopy_with_retries(
+            attempts=3, delay_seconds=0, check=always_fails
+        )
+    assert calls["count"] == 3
+
+
 def test_telegram_preflight_checks_bot_and_chat_without_sending(monkeypatch):
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "123")
