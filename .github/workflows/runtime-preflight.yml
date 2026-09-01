@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "xau_company/preflight.py"
+      - "xau_company/data.py"
       - ".github/workflows/runtime-preflight.yml"
   workflow_dispatch:
 
