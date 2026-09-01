@@ -28,9 +28,15 @@ class FreshnessPolicy:
     market_metadata_ns: int = 3_600_000_000_000
 
     def __post_init__(self) -> None:
-        for name, value in self.__dict__.items():
-            if value <= 0:
-                raise ValueError(f"{name} must be positive")
+        values = (
+            self.kalshi_book_ns,
+            self.brti_ns,
+            self.coinbase_ns,
+            self.kraken_ns,
+            self.market_metadata_ns,
+        )
+        if any(value <= 0 for value in values):
+            raise ValueError("freshness thresholds must be positive")
 
 
 @dataclass(frozen=True, slots=True)
