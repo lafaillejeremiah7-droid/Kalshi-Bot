@@ -25,6 +25,7 @@ class EventKind(StrEnum):
     INDEX_TICK = "index_tick"
     SPOT_TICK = "spot_tick"
     SETTLEMENT = "settlement"
+    FEE_SCHEDULE = "fee_schedule"
     HEALTH = "health"
 
 
@@ -152,6 +153,26 @@ class SettlementEvent(BaseEvent):
     result: Literal["yes", "no"]
 
 
+class FeeScheduleEvent(BaseEvent):
+    """Observed Kalshi series fee metadata with a separate effective timestamp.
+
+    `event_ts_ns`/`recv_ts_ns` describe when this research process observed the
+    metadata. `effective_ts_ns` is the exchange schedule time used for historical
+    cost accounting. Keeping those clocks separate prevents future scheduled fee
+    changes from masquerading as information available earlier in feature replay.
+    """
+
+    kind: Literal[EventKind.FEE_SCHEDULE] = EventKind.FEE_SCHEDULE
+    source: Literal[Source.KALSHI] = Source.KALSHI
+    market_ticker: None = None
+    series_ticker: str
+    fee_change_id: str | None = None
+    fee_type: Literal["quadratic", "quadratic_with_maker_fees", "flat"]
+    fee_multiplier: Decimal = Field(gt=Decimal("0"))
+    effective_ts_ns: int = Field(gt=0)
+    historical: bool = False
+
+
 class HealthEvent(BaseEvent):
     kind: Literal[EventKind.HEALTH] = EventKind.HEALTH
     source: Literal[Source.SYSTEM] = Source.SYSTEM
@@ -169,6 +190,7 @@ ResearchEvent = Annotated[
         IndexTickEvent,
         SpotTickEvent,
         SettlementEvent,
+        FeeScheduleEvent,
         HealthEvent,
     ],
     Field(discriminator="kind"),
