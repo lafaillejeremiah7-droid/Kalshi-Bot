@@ -9,10 +9,8 @@ from kalshi_research.capture.external_runner import run_external_capture
 from kalshi_research.capture.runner import discover_open_btc15m_market, run_kalshi_capture
 from kalshi_research.config import ResearchConfig
 from kalshi_research.feeds.kalshi_rest import KalshiRestClient
-from kalshi_research.research.complete import (
-    ResearchCompletionError,
-    run_research_completion_store,
-)
+from kalshi_research.research.complete import ResearchCompletionError
+from kalshi_research.research.completion_entrypoint import run_research_completion_store
 from kalshi_research.research.registry import ExperimentReportArchive, ReportArchiveError
 from kalshi_research.research.runner import (
     ResearchRunError,
