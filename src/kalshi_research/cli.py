@@ -9,6 +9,7 @@ from kalshi_research.capture.external_runner import run_external_capture
 from kalshi_research.capture.runner import discover_open_btc15m_market, run_kalshi_capture
 from kalshi_research.config import ResearchConfig
 from kalshi_research.feeds.kalshi_rest import KalshiRestClient
+from kalshi_research.research.registry import ExperimentReportArchive, ReportArchiveError
 from kalshi_research.research.runner import (
     ResearchRunError,
     research_report_digest,
@@ -84,14 +85,21 @@ def cmd_capture_external(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_research_run(args: argparse.Namespace) -> int:
-    if args.db:
+def _research_paths(args: argparse.Namespace) -> tuple[Path, Path]:
+    config = ResearchConfig.from_env()
+    if getattr(args, "db", None):
         db_path = Path(args.db).expanduser()
     else:
-        config = ResearchConfig.from_env()
-        config.ensure_research_dirs()
         db_path = config.research_db_path
+    if getattr(args, "archive", None):
+        archive_path = Path(args.archive).expanduser()
+    else:
+        archive_path = config.report_archive_dir
+    return db_path, archive_path
 
+
+def cmd_research_run(args: argparse.Namespace) -> int:
+    db_path, archive_path = _research_paths(args)
     if not db_path.exists():
         print(
             json.dumps(
@@ -111,7 +119,8 @@ def cmd_research_run(args: argparse.Namespace) -> int:
     try:
         with SqliteEventStore(db_path) as store:
             report = run_research_store(store)
-    except ResearchRunError as exc:
+        archived = ExperimentReportArchive(archive_path).publish(report)
+    except (ResearchRunError, ReportArchiveError) as exc:
         print(
             json.dumps(
                 {
@@ -119,6 +128,7 @@ def cmd_research_run(args: argparse.Namespace) -> int:
                     "mode": "research_only",
                     "order_placement": False,
                     "research_db": str(db_path),
+                    "report_archive": str(archive_path),
                     "reason": str(exc),
                 },
                 indent=2,
@@ -130,9 +140,91 @@ def cmd_research_run(args: argparse.Namespace) -> int:
     payload = {
         "status": "passed",
         "report_digest": research_report_digest(report),
+        "archived_report": str(archived.path),
         "report": json.loads(research_report_json(report)),
     }
     print(json.dumps(payload, indent=2, sort_keys=True, allow_nan=False))
+    return 0
+
+
+def cmd_research_list(args: argparse.Namespace) -> int:
+    _, archive_path = _research_paths(args)
+    try:
+        entries = ExperimentReportArchive(archive_path).list()
+    except ReportArchiveError as exc:
+        print(
+            json.dumps(
+                {
+                    "status": "blocked",
+                    "mode": "research_only",
+                    "order_placement": False,
+                    "report_archive": str(archive_path),
+                    "reason": str(exc),
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 2
+
+    payload = {
+        "status": "passed",
+        "mode": "research_only",
+        "order_placement": False,
+        "report_archive": str(archive_path),
+        "count": len(entries),
+        "reports": [
+            {
+                "digest": entry.digest,
+                "series_ticker": entry.series_ticker,
+                "plan_digest": entry.plan_digest,
+                "events_digest": entry.events_digest,
+                "market_count": entry.market_count,
+                "event_count": entry.event_count,
+                "path": str(entry.path),
+            }
+            for entry in entries
+        ],
+    }
+    print(json.dumps(payload, indent=2, sort_keys=True, allow_nan=False))
+    return 0
+
+
+def cmd_research_show(args: argparse.Namespace) -> int:
+    _, archive_path = _research_paths(args)
+    try:
+        archive = ExperimentReportArchive(archive_path)
+        entry = archive.get(args.digest)
+        report = archive.read_payload(args.digest)
+    except ReportArchiveError as exc:
+        print(
+            json.dumps(
+                {
+                    "status": "blocked",
+                    "mode": "research_only",
+                    "order_placement": False,
+                    "report_archive": str(archive_path),
+                    "reason": str(exc),
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 2
+
+    print(
+        json.dumps(
+            {
+                "status": "passed",
+                "report_digest": entry.digest,
+                "archived_report": str(entry.path),
+                "report": report,
+            },
+            indent=2,
+            sort_keys=True,
+            allow_nan=False,
+        )
+    )
     return 0
 
 
@@ -180,7 +272,7 @@ def main() -> int:
     research_run = sub.add_parser(
         "research-run",
         help=(
-            "Run the predeclared fail-closed research suite from stored events; "
+            "Run and immutably archive the predeclared fail-closed research suite; "
             "never places orders"
         ),
     )
@@ -188,7 +280,32 @@ def main() -> int:
         "--db",
         help="Optional research SQLite path; defaults to the configured research DB",
     )
+    research_run.add_argument(
+        "--archive",
+        help="Optional immutable report archive path; defaults to configured data/experiments",
+    )
     research_run.set_defaults(func=cmd_research_run)
+
+    research_list = sub.add_parser(
+        "research-list",
+        help="Verify and list immutable archived research reports",
+    )
+    research_list.add_argument(
+        "--archive",
+        help="Optional immutable report archive path",
+    )
+    research_list.set_defaults(func=cmd_research_list)
+
+    research_show = sub.add_parser(
+        "research-show",
+        help="Verify and display one immutable archived research report",
+    )
+    research_show.add_argument("--digest", required=True, help="SHA-256 research report digest")
+    research_show.add_argument(
+        "--archive",
+        help="Optional immutable report archive path",
+    )
+    research_show.set_defaults(func=cmd_research_show)
 
     args = parser.parse_args()
     return args.func(args)
