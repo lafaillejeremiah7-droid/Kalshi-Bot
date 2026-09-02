@@ -10,6 +10,7 @@ from typing import Any
 
 import websockets
 
+from kalshi_research.capture.market_metadata import capture_market_metadata
 from kalshi_research.config import ResearchConfig
 from kalshi_research.feeds.kalshi_normalize import (
     KalshiSchemaError,
@@ -203,6 +204,16 @@ async def run_kalshi_capture(
     processed = 0
 
     with SqliteEventStore(config.research_db_path) as store:
+        # Capture target/open/close/status before the first websocket decision row.
+        # If the market has already determined, this also persists its official
+        # settlement label. Raw REST evidence is written before normalization.
+        capture_market_metadata(
+            config,
+            market_ticker,
+            store=store,
+            raw_capture=raw_capture,
+            connection_id=connection_id,
+        )
         _capture_fee_metadata(
             config=config,
             store=store,
