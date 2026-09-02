@@ -21,6 +21,26 @@ class KalshiRestClient:
             response.raise_for_status()
             return response.json()["series"]
 
+    def get_market(self, ticker: str) -> dict[str, Any]:
+        """Return current market metadata, falling back to historical storage.
+
+        Kalshi moves sufficiently old settled markets behind the historical
+        endpoints. Evidence recovery after a long process outage must still be
+        able to backfill the result for a contract captured before that outage.
+        """
+        if not ticker:
+            raise ValueError("ticker is required")
+        with self._client() as client:
+            response = client.get(f"/markets/{ticker}")
+            if response.status_code == 404:
+                response = client.get(f"/historical/markets/{ticker}")
+            response.raise_for_status()
+            body = response.json()
+            market = body.get("market")
+            if not isinstance(market, dict):
+                raise ValueError("Kalshi market response did not contain a market object")
+            return market
+
     def get_markets(self, *, series_ticker: str, status: str | None = None) -> list[dict[str, Any]]:
         params: dict[str, Any] = {"series_ticker": series_ticker, "limit": 1000}
         if status:
@@ -39,7 +59,12 @@ class KalshiRestClient:
                 if not cursor:
                     return out
 
-    def get_trades(self, ticker: str, min_ts: int | None = None, max_ts: int | None = None) -> list[dict[str, Any]]:
+    def get_trades(
+        self,
+        ticker: str,
+        min_ts: int | None = None,
+        max_ts: int | None = None,
+    ) -> list[dict[str, Any]]:
         params: dict[str, Any] = {"ticker": ticker, "limit": 1000}
         if min_ts is not None:
             params["min_ts"] = min_ts
@@ -65,11 +90,18 @@ class KalshiRestClient:
             response.raise_for_status()
             return response.json()
 
-    def get_fee_changes(self, series_ticker: str, show_historical: bool = True) -> list[dict[str, Any]]:
+    def get_fee_changes(
+        self,
+        series_ticker: str,
+        show_historical: bool = True,
+    ) -> list[dict[str, Any]]:
         with self._client() as client:
             response = client.get(
                 "/series/fee_changes",
-                params={"series_ticker": series_ticker, "show_historical": str(show_historical).lower()},
+                params={
+                    "series_ticker": series_ticker,
+                    "show_historical": str(show_historical).lower(),
+                },
             )
             response.raise_for_status()
             return response.json().get("series_fee_change_arr", [])
