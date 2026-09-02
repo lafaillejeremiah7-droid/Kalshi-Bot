@@ -311,6 +311,8 @@ class EvidenceSupervisor:
         state = self.components["evaluator"]
         if not self.policy.evaluate:
             state.status = "stopped"
+            await stop_event.wait()
+            state.last_stopped_ts_ns = time.time_ns()
             return
 
         while not stop_event.is_set():
