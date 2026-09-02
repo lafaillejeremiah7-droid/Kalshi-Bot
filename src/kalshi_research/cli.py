@@ -9,6 +9,10 @@ from kalshi_research.capture.external_runner import run_external_capture
 from kalshi_research.capture.runner import discover_open_btc15m_market, run_kalshi_capture
 from kalshi_research.config import ResearchConfig
 from kalshi_research.feeds.kalshi_rest import KalshiRestClient
+from kalshi_research.research.complete import (
+    ResearchCompletionError,
+    run_research_completion_store,
+)
 from kalshi_research.research.registry import ExperimentReportArchive, ReportArchiveError
 from kalshi_research.research.runner import (
     ResearchRunError,
@@ -98,22 +102,20 @@ def _research_paths(args: argparse.Namespace) -> tuple[Path, Path]:
     return db_path, archive_path
 
 
+def _missing_db_payload(db_path: Path) -> dict[str, object]:
+    return {
+        "status": "blocked",
+        "mode": "research_only",
+        "order_placement": False,
+        "research_db": str(db_path),
+        "reason": "research_db_not_found",
+    }
+
+
 def cmd_research_run(args: argparse.Namespace) -> int:
     db_path, archive_path = _research_paths(args)
     if not db_path.exists():
-        print(
-            json.dumps(
-                {
-                    "status": "blocked",
-                    "mode": "research_only",
-                    "order_placement": False,
-                    "research_db": str(db_path),
-                    "reason": "research_db_not_found",
-                },
-                indent=2,
-                sort_keys=True,
-            )
-        )
+        print(json.dumps(_missing_db_payload(db_path), indent=2, sort_keys=True))
         return 2
 
     try:
@@ -141,6 +143,45 @@ def cmd_research_run(args: argparse.Namespace) -> int:
         "status": "passed",
         "report_digest": research_report_digest(report),
         "archived_report": str(archived.path),
+        "report": json.loads(research_report_json(report)),
+    }
+    print(json.dumps(payload, indent=2, sort_keys=True, allow_nan=False))
+    return 0
+
+
+def cmd_research_complete(args: argparse.Namespace) -> int:
+    db_path, archive_path = _research_paths(args)
+    if not db_path.exists():
+        print(json.dumps(_missing_db_payload(db_path), indent=2, sort_keys=True))
+        return 2
+
+    try:
+        with SqliteEventStore(db_path) as store:
+            report = run_research_completion_store(store)
+        archived = ExperimentReportArchive(archive_path).publish(report)
+    except (ResearchCompletionError, ReportArchiveError) as exc:
+        print(
+            json.dumps(
+                {
+                    "status": "blocked",
+                    "mode": "research_only",
+                    "order_placement": False,
+                    "research_db": str(db_path),
+                    "report_archive": str(archive_path),
+                    "reason": str(exc),
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 2
+
+    payload = {
+        "status": "evaluated",
+        "verdict": report.verdict,
+        "report_digest": research_report_digest(report),
+        "archived_report": str(archived.path),
+        "order_placement": False,
         "report": json.loads(research_report_json(report)),
     }
     print(json.dumps(payload, indent=2, sort_keys=True, allow_nan=False))
@@ -285,6 +326,23 @@ def main() -> int:
         help="Optional immutable report archive path; defaults to configured data/experiments",
     )
     research_run.set_defaults(func=cmd_research_run)
+
+    research_complete = sub.add_parser(
+        "research-complete",
+        help=(
+            "Run the full immutable OOS model, execution-economics, stress, and promotion "
+            "verdict; never places orders"
+        ),
+    )
+    research_complete.add_argument(
+        "--db",
+        help="Optional research SQLite path; defaults to the configured research DB",
+    )
+    research_complete.add_argument(
+        "--archive",
+        help="Optional immutable report archive path; defaults to configured data/experiments",
+    )
+    research_complete.set_defaults(func=cmd_research_complete)
 
     research_list = sub.add_parser(
         "research-list",
