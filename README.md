@@ -24,10 +24,17 @@ A research-only foundation for discovering and rejecting/validating possible edg
 - closed-form partial-final-minute Brownian settlement baseline
 - normalized distance/volatility/order-book/microprice/lead-lag math
 - whole-market expanding walk-forward probability experiments
+- nested baseline -> settlement -> external -> Kalshi-microstructure ablation evaluation
+- training-only standardization/imputation and validation-only L2 model selection
+- non-overlapping out-of-sample test-market predictions
 - receive-time lead/lag tests with Bonferroni correction and moving-block bootstrap intervals
 - probability calibration metrics and cost-adjusted edge calculations
-- deterministic fail-closed research runner with input, plan, feature, and report digests
-- conservative research promotion gates
+- fee-aware YES/NO/no-trade research decision logic
+- event-driven visible-depth taker replay, partial fills, and conservative maker-queue assumptions
+- latency and transaction-cost stress evaluation
+- deterministic fail-closed research runner with input, plan, feature, prediction, and report digests
+- immutable content-addressed experiment reports
+- conservative research promotion gates with explicit `promoted`, `rejected`, and `insufficient_evidence` verdicts
 - unit tests and CI
 
 ## Research doctrine
@@ -83,7 +90,7 @@ All capture commands are research-only. They contain no order-placement path.
 
 ## Deterministic research runner
 
-Run the complete fail-closed research suite against the configured canonical SQLite store:
+Run the fail-closed structural/probability research suite against the configured canonical SQLite store:
 
 ```bash
 kalshi-research research-run
@@ -121,6 +128,34 @@ A successful report contains:
 
 A missing `--db` path returns a blocked result and does **not** create an empty database.
 
+## Complete research verdict
+
+Run the full model + execution-economics + stress + promotion evaluation with:
+
+```bash
+kalshi-research research-complete
+```
+
+Or with explicit paths:
+
+```bash
+kalshi-research research-complete \
+  --db /absolute/path/to/research.sqlite3 \
+  --archive /absolute/path/to/experiments
+```
+
+`research-complete` first audits the canonical evidence in its original stored receive order. It then performs the predeclared whole-market walk-forward evaluation, feature ablations, fee-aware research selection, receive-time execution replay, and stress tests. The report is content-addressed and archived immutably.
+
+Its verdict is one of:
+
+- `promoted`: every evidence threshold and promotion gate passes
+- `rejected`: enough evidence exists, but one or more performance/robustness gates fail
+- `insufficient_evidence`: the available data cannot support a valid promotion/rejection conclusion, for example because sample, quote, fee, or executable-decision coverage is inadequate
+
+`insufficient_evidence` is a successful research evaluation outcome, not a fabricated pass and not a software failure. Structural corruption, receive-time regression, archive-integrity failure, or other invalid evidence instead returns a blocked command result.
+
+See `docs/research_completion.md` for the exact completion protocol.
+
 ## Data integrity safeguards
 
 - raw frames are written before normalization
@@ -128,24 +163,25 @@ A missing `--db` path returns a blocked result and does **not** create an empty 
 - Kalshi order-book continuity is checked by subscription `sid + seq`
 - Kraken book updates are transactional; invalid frames cannot partially mutate the in-memory book
 - a malformed Kraken stateful L2 frame stops that capture session instead of building on missing state
-- receive-time is the default database/replay ordering and decreasing receive time is rejected
+- receive-time is the default database/replay ordering and decreasing receive time is rejected before completion normalization
 - settlement events are excluded from model feature replay even if their receive timestamp equals market close
 - pre-open global feed history is excluded from a contract's feature-materialization window
 - Coinbase source sequence, Kraken checksum, BRTI upstream timestamp, and Kalshi receive timestamp are retained for later diagnostics
 - Kraken checksums are retained for audit but are not falsely labeled verified until the exact CRC canonicalization has its own independent test vectors
 - depth-aware taker fill estimation and explicit conservative maker queue assumptions
 - expanding walk-forward splits grouped by whole 15-minute markets
+- test-market labels are scoring-only and do not affect the fitted prediction for those markets
+- missing optional model features use training-derived imputation and are not silently row-dropped
 - lead/lag inference requires the predeclared minimum pair count, multiple-testing correction, and a block-bootstrap interval excluding zero
 
-See `docs/research_blueprint.md` and `docs/mathematical_spec.md` before adding models.
+See `docs/research_blueprint.md`, `docs/mathematical_spec.md`, and `docs/research_completion.md` before changing model or promotion logic.
 
-## Next implementation sequence
+## Evidence and promotion sequence
 
-1. collect enough real synchronized `KXBTC15M` sessions to satisfy the default research-run coverage and walk-forward gates
-2. run the immutable baseline experiment plan and archive report digests
-3. perform baseline-vs-feature ablation studies without changing the held-out test markets
-4. add event-driven taker replay across actual visible depth
-5. add a conservative maker queue simulator with latency/cancel stress cases
-6. build an immutable experiment/model registry after repeatable evidence exists
-7. generate shadow probability outputs only after every promotion gate passes
-8. do not add live strategy/execution authority until probability evidence and realistic replay economics both pass independently
+1. collect enough real synchronized `KXBTC15M`, BRTI, Coinbase, Kraken, order-book, and fee-schedule evidence to satisfy the default coverage gates
+2. run `kalshi-research research-complete` without changing the predeclared plan after inspecting outcomes
+3. retain the immutable report digest and compare repeat runs for deterministic reproducibility
+4. if the verdict is `insufficient_evidence`, collect the missing evidence rather than relaxing the gate
+5. if the verdict is `rejected`, keep the model rejected unless a new predeclared research version is justified and independently retested
+6. only a `promoted` research verdict may justify a separate later shadow-probability stage
+7. do not add live strategy/execution authority until probability evidence and realistic replay economics pass independently and a separate live-safety design is reviewed
