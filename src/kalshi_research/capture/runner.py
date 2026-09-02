@@ -19,6 +19,7 @@ from kalshi_research.feeds.kalshi_normalize import (
 )
 from kalshi_research.feeds.kalshi_rest import KalshiRestClient
 from kalshi_research.feeds.kalshi_ws import SequenceGap, create_auth_headers
+from kalshi_research.research.fees import normalize_series_fee_events
 from kalshi_research.storage.raw_capture import RawJsonlCapture, RawRecord
 from kalshi_research.storage.sqlite_store import SqliteEventStore
 
@@ -151,6 +152,38 @@ def _require_credentials(config: ResearchConfig) -> tuple[str, Path]:
     return config.kalshi_api_key_id, path
 
 
+def _capture_fee_metadata(
+    *,
+    config: ResearchConfig,
+    store: SqliteEventStore,
+    raw_capture: RawJsonlCapture,
+    connection_id: str,
+) -> None:
+    """Persist raw + canonical public fee history before market-data streaming.
+
+    Fee history is transaction-cost metadata only. It is intentionally stored as
+    its own event kind and ignored by predictive feature materialization.
+    """
+    client = KalshiRestClient(config.kalshi_rest_base)
+    observed_ts_ns = time.time_ns()
+    series = client.get_series(config.kalshi_series_ticker)
+    fee_changes = client.get_fee_changes(config.kalshi_series_ticker, show_historical=True)
+    raw_capture.append(
+        RawRecord(
+            source="kalshi_rest_fee_metadata",
+            recv_ts_ns=observed_ts_ns,
+            connection_id=connection_id,
+            payload={"series": series, "fee_changes": fee_changes},
+        )
+    )
+    events = normalize_series_fee_events(
+        series=series,
+        fee_changes=fee_changes,
+        observed_ts_ns=observed_ts_ns,
+    )
+    store.append_many(events)
+
+
 async def run_kalshi_capture(
     config: ResearchConfig,
     *,
@@ -170,6 +203,12 @@ async def run_kalshi_capture(
     processed = 0
 
     with SqliteEventStore(config.research_db_path) as store:
+        _capture_fee_metadata(
+            config=config,
+            store=store,
+            raw_capture=raw_capture,
+            connection_id=connection_id,
+        )
         async with websockets.connect(
             config.kalshi_ws_url,
             additional_headers=headers,
