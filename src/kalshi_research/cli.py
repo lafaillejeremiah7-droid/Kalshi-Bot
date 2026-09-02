@@ -3,14 +3,25 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import time
 from pathlib import Path
 
 from kalshi_research.capture.external_runner import run_external_capture
 from kalshi_research.capture.runner import discover_open_btc15m_market, run_kalshi_capture
+from kalshi_research.capture.supervisor import (
+    EvidenceSupervisorError,
+    SupervisorPolicy,
+    read_supervisor_status,
+    run_evidence_supervisor,
+)
 from kalshi_research.config import ResearchConfig
 from kalshi_research.feeds.kalshi_rest import KalshiRestClient
 from kalshi_research.research.complete import ResearchCompletionError
 from kalshi_research.research.completion_entrypoint import run_research_completion_store
+from kalshi_research.research.evidence_status import (
+    evidence_readiness_from_events,
+    evidence_readiness_store,
+)
 from kalshi_research.research.registry import ExperimentReportArchive, ReportArchiveError
 from kalshi_research.research.runner import (
     ResearchRunError,
@@ -87,6 +98,87 @@ def cmd_capture_external(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_capture_all(args: argparse.Namespace) -> int:
+    config = ResearchConfig.from_env()
+    try:
+        policy = SupervisorPolicy(
+            market_poll_interval_s=args.market_poll_seconds,
+            restart_delay_s=args.restart_delay_seconds,
+            evaluation_interval_s=args.evaluation_interval_seconds,
+            heartbeat_interval_s=args.heartbeat_seconds,
+            evaluate=not args.no_evaluate,
+        )
+    except ValueError as exc:
+        print(
+            json.dumps(
+                {
+                    "status": "blocked",
+                    "mode": "research_capture_only",
+                    "order_placement": False,
+                    "reason": str(exc),
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 2
+
+    status_path = config.research_db_path.parent / "ops" / "status.json"
+    print(
+        json.dumps(
+            {
+                "status": "starting",
+                "mode": "research_capture_only",
+                "order_placement": False,
+                "series_ticker": config.kalshi_series_ticker,
+                "research_db": str(config.research_db_path),
+                "raw_capture_dir": str(config.raw_capture_dir),
+                "report_archive": str(config.report_archive_dir),
+                "status_file": str(status_path),
+                "feeds": ["kalshi", "brti", "coinbase", "kraken"],
+                "periodic_evaluation": policy.evaluate,
+                "evaluation_interval_seconds": policy.evaluation_interval_s,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+
+    try:
+        asyncio.run(run_evidence_supervisor(config, policy=policy))
+    except KeyboardInterrupt:
+        print(
+            json.dumps(
+                {
+                    "status": "stopped_by_user",
+                    "mode": "research_capture_only",
+                    "order_placement": False,
+                    "status_file": str(status_path),
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 0
+    except EvidenceSupervisorError as exc:
+        print(
+            json.dumps(
+                {
+                    "status": "blocked",
+                    "mode": "research_capture_only",
+                    "order_placement": False,
+                    "research_db": str(config.research_db_path),
+                    "status_file": str(status_path),
+                    "reason": str(exc),
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 2
+    return 0
+
+
 def _research_paths(args: argparse.Namespace) -> tuple[Path, Path]:
     config = ResearchConfig.from_env()
     if getattr(args, "db", None):
@@ -108,6 +200,112 @@ def _missing_db_payload(db_path: Path) -> dict[str, object]:
         "research_db": str(db_path),
         "reason": "research_db_not_found",
     }
+
+
+def cmd_evidence_status(args: argparse.Namespace) -> int:
+    db_path, _ = _research_paths(args)
+    if not db_path.exists():
+        readiness = evidence_readiness_from_events(())
+        payload = readiness.to_dict()
+        payload["research_db"] = str(db_path)
+        payload["reason"] = "research_db_not_found"
+        print(json.dumps(payload, indent=2, sort_keys=True, allow_nan=False))
+        return 0
+
+    try:
+        with SqliteEventStore(db_path) as store:
+            readiness = evidence_readiness_store(store)
+    except ResearchCompletionError as exc:
+        print(
+            json.dumps(
+                {
+                    "status": "blocked",
+                    "mode": "research_only",
+                    "order_placement": False,
+                    "research_db": str(db_path),
+                    "reason": str(exc),
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 2
+
+    payload = readiness.to_dict()
+    payload["research_db"] = str(db_path)
+    print(json.dumps(payload, indent=2, sort_keys=True, allow_nan=False))
+    return 0
+
+
+def cmd_ops_status(args: argparse.Namespace) -> int:
+    db_path, _ = _research_paths(args)
+    status_path = db_path.parent / "ops" / "status.json"
+    if not status_path.exists():
+        print(
+            json.dumps(
+                {
+                    "status": "not_running",
+                    "mode": "research_capture_only",
+                    "order_placement": False,
+                    "status_file": str(status_path),
+                    "reason": "status_file_not_found",
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 0
+
+    try:
+        payload = read_supervisor_status(status_path)
+    except (EvidenceSupervisorError, OSError, json.JSONDecodeError) as exc:
+        print(
+            json.dumps(
+                {
+                    "status": "blocked",
+                    "mode": "research_capture_only",
+                    "order_placement": False,
+                    "status_file": str(status_path),
+                    "reason": str(exc),
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 2
+
+    updated_ts_ns = payload.get("updated_ts_ns")
+    heartbeat_age_seconds: float | None = None
+    heartbeat_stale = True
+    if isinstance(updated_ts_ns, int):
+        heartbeat_age_seconds = max(0.0, (time.time_ns() - updated_ts_ns) / 1_000_000_000)
+        heartbeat_stale = heartbeat_age_seconds > 30.0
+
+    components = payload.get("components")
+    component_states: list[object] = []
+    if isinstance(components, dict):
+        component_states = [
+            state.get("status")
+            for state in components.values()
+            if isinstance(state, dict)
+        ]
+
+    if any(state == "failed" for state in component_states):
+        ops_status = "failed"
+    elif component_states and all(state == "stopped" for state in component_states):
+        ops_status = "stopped"
+    elif heartbeat_stale:
+        ops_status = "stale"
+    else:
+        ops_status = "running"
+
+    result = dict(payload)
+    result["status"] = ops_status
+    result["heartbeat_age_seconds"] = heartbeat_age_seconds
+    result["heartbeat_stale"] = heartbeat_stale
+    result["status_file"] = str(status_path)
+    print(json.dumps(result, indent=2, sort_keys=True, allow_nan=False))
+    return 0
 
 
 def cmd_research_run(args: argparse.Namespace) -> int:
@@ -307,6 +505,64 @@ def main() -> int:
         help="Optional message limit for controlled research samples",
     )
     external.set_defaults(func=cmd_capture_external)
+
+    capture_all = sub.add_parser(
+        "capture-all",
+        help=(
+            "Continuously capture Kalshi/BRTI/Coinbase/Kraken, roll 15-minute markets, "
+            "and archive periodic research verdicts; never places orders"
+        ),
+    )
+    capture_all.add_argument(
+        "--market-poll-seconds",
+        type=float,
+        default=5.0,
+        help="Operational interval for detecting KXBTC15M contract rollover",
+    )
+    capture_all.add_argument(
+        "--restart-delay-seconds",
+        type=float,
+        default=2.0,
+        help="Operational delay before restarting a disconnected feed",
+    )
+    capture_all.add_argument(
+        "--evaluation-interval-seconds",
+        type=float,
+        default=900.0,
+        help="How often to run and immutably archive research-complete",
+    )
+    capture_all.add_argument(
+        "--heartbeat-seconds",
+        type=float,
+        default=5.0,
+        help="Operational status heartbeat interval",
+    )
+    capture_all.add_argument(
+        "--no-evaluate",
+        action="store_true",
+        help="Capture continuously without periodic evaluation; does not alter model settings",
+    )
+    capture_all.set_defaults(func=cmd_capture_all)
+
+    evidence_status = sub.add_parser(
+        "evidence-status",
+        help="Show progress toward first OOS evaluation and the 500-decision promotion gate",
+    )
+    evidence_status.add_argument(
+        "--db",
+        help="Optional research SQLite path; defaults to the configured research DB",
+    )
+    evidence_status.set_defaults(func=cmd_evidence_status)
+
+    ops_status = sub.add_parser(
+        "ops-status",
+        help="Read the unattended capture heartbeat and component health",
+    )
+    ops_status.add_argument(
+        "--db",
+        help="Optional research SQLite path used to locate the adjacent ops status file",
+    )
+    ops_status.set_defaults(func=cmd_ops_status)
 
     research_run = sub.add_parser(
         "research-run",
