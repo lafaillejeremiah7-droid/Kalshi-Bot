@@ -3,13 +3,17 @@ from __future__ import annotations
 from decimal import Decimal
 
 from kalshi_research.research.acceptance import PromotionDecision, ResearchMetrics
+from kalshi_research.research.audit import DataQualityReport
 from kalshi_research.research.complete import (
     ABLATION_FEATURES,
     CompletionPlan,
+    ResearchCompletionReport,
     classify_research_verdict,
     evaluate_oos_models,
 )
 from kalshi_research.research.materializer import ModelFeatureRow
+from kalshi_research.research.registry import ExperimentReportArchive
+from kalshi_research.research.runner import research_report_digest
 
 
 def _row(index: int, outcome: int, *, missing_extras: bool = False) -> ModelFeatureRow:
@@ -66,6 +70,24 @@ def _dataset(*, missing_extras: bool = False):
     }
     ordered = tuple(outcomes)
     return rows, outcomes, ordered
+
+
+def _audit() -> DataQualityReport:
+    return DataQualityReport(
+        total_events=1,
+        counts_by_source={},
+        counts_by_kind={},
+        receive_time_regressions=0,
+        orderbook_sequence_gaps=0,
+        orderbook_sequence_regressions=0,
+        orderbook_deltas_without_snapshot=0,
+        index_sequence_gaps=0,
+        index_sequence_regressions=0,
+        brti_sample_count_regressions=0,
+        negative_latency_events=0,
+        settlement_reconciliations=(),
+        issues=(),
+    )
 
 
 def test_oos_models_are_deterministic_and_test_markets_do_not_overlap():
@@ -175,3 +197,40 @@ def test_completion_plan_digest_is_stable_and_configuration_sensitive():
     assert len(first.digest) == 64
     assert first.digest != changed.digest
     assert first.order_quantity == Decimal("1")
+
+
+def test_completion_report_uses_existing_content_addressed_archive(tmp_path):
+    report = ResearchCompletionReport(
+        mode="research_only",
+        report_kind="research_complete_v1",
+        series_ticker="KXBTC15M",
+        order_placement=False,
+        plan_digest="b" * 64,
+        event_count=1,
+        events_digest="a" * 64,
+        markets=("KXBTC15M-M1",),
+        settled_market_count=1,
+        horizon_eligible_market_count=0,
+        audit=_audit(),
+        model_spec_digest="c" * 64,
+        verdict="insufficient_evidence",
+        evidence_deficits=("horizon_eligible_markets=0 required_at_least=140",),
+        promotion_reasons=(),
+        ablations=(),
+        folds=(),
+        prediction_digest=None,
+        selections=(),
+        metrics=None,
+        economics=None,
+    )
+    archive = ExperimentReportArchive(tmp_path / "experiments")
+
+    first = archive.publish(report)
+    second = archive.publish(report)
+
+    assert first == second
+    assert first.digest == research_report_digest(report)
+    payload = archive.read_payload(first.digest)
+    assert payload["report_kind"] == "research_complete_v1"
+    assert payload["verdict"] == "insufficient_evidence"
+    assert payload["order_placement"] is False
