@@ -15,6 +15,7 @@ class ResearchConfig:
     kalshi_private_key_path: Path | None = None
     research_db_path: Path = Path("data/research.sqlite3")
     raw_capture_dir: Path = Path("data/raw")
+    report_archive_dir: Path = Path("data/experiments")
 
     @classmethod
     def from_env(cls) -> "ResearchConfig":
@@ -32,8 +33,12 @@ class ResearchConfig:
             kalshi_private_key_path=Path(key_path) if key_path else None,
             research_db_path=Path(os.getenv("RESEARCH_DB_PATH", "data/research.sqlite3")),
             raw_capture_dir=Path(os.getenv("RAW_CAPTURE_DIR", "data/raw")),
+            report_archive_dir=Path(
+                os.getenv("REPORT_ARCHIVE_DIR", "data/experiments")
+            ),
         )
 
     def ensure_research_dirs(self) -> None:
         self.research_db_path.parent.mkdir(parents=True, exist_ok=True)
         self.raw_capture_dir.mkdir(parents=True, exist_ok=True)
+        self.report_archive_dir.mkdir(parents=True, exist_ok=True)
