@@ -8,7 +8,7 @@ from typing import Iterable
 
 from pydantic import TypeAdapter
 
-from kalshi_research.domain.events import ResearchEvent
+from kalshi_research.domain.events import EventKind, ResearchEvent
 
 
 EVENT_ADAPTER = TypeAdapter(ResearchEvent)
@@ -105,17 +105,32 @@ class SqliteEventStore:
             )
         return self.conn.total_changes - before
 
+    @staticmethod
+    def _order_clause(order_by: str) -> str:
+        if order_by == "receive":
+            return " ORDER BY recv_ts_ns ASC, event_ts_ns ASC, id ASC"
+        if order_by == "event":
+            return " ORDER BY event_ts_ns ASC, recv_ts_ns ASC, id ASC"
+        raise ValueError("order_by must be receive or event")
+
     def iter_events(self, market_ticker: str | None = None, *, order_by: str = "receive"):
         query = "SELECT payload_json FROM events"
         args: tuple[object, ...] = ()
         if market_ticker:
             query += " WHERE market_ticker = ?"
             args = (market_ticker,)
-        if order_by == "receive":
-            query += " ORDER BY recv_ts_ns ASC, event_ts_ns ASC, id ASC"
-        elif order_by == "event":
-            query += " ORDER BY event_ts_ns ASC, recv_ts_ns ASC, id ASC"
-        else:
-            raise ValueError("order_by must be receive or event")
+        query += self._order_clause(order_by)
         for (payload,) in self.conn.execute(query, args):
+            yield EVENT_ADAPTER.validate_json(payload)
+
+    def iter_events_by_kind(
+        self,
+        kind: EventKind | str,
+        *,
+        order_by: str = "receive",
+    ):
+        """Iterate one canonical event kind using the existing kind/time index."""
+        query = "SELECT payload_json FROM events WHERE kind = ?"
+        query += self._order_clause(order_by)
+        for (payload,) in self.conn.execute(query, (str(kind),)):
             yield EVENT_ADAPTER.validate_json(payload)
