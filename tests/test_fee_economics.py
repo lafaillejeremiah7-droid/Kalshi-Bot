@@ -198,7 +198,7 @@ def test_fee_normalization_and_storage_roundtrip(tmp_path):
 
     with SqliteEventStore(tmp_path / "research.sqlite3") as store:
         assert store.append_many(events) == 2
-        replayed = tuple(store.iter_events(order_by="recv_ts"))
+        replayed = tuple(store.iter_events(order_by="receive"))
     assert replayed == events
 
 
